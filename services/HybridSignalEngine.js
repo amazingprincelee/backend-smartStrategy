@@ -34,8 +34,8 @@ const FUTURES_PAIRS = [
   'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT',
 ];
 
-const MIN_AI_CONFIDENCE    = 0.60;  // minimum AI probability to proceed (rule-based tops out ~0.76)
-const MIN_RULE_SCORE       = 0.40;  // minimum rule confirmation score (0-1)
+const MIN_AI_CONFIDENCE    = 0.55;  // minimum AI probability to proceed
+const MIN_RULE_SCORE       = 0.28;  // minimum rule confirmation score (0-1)
 const COOLDOWN_MS          = 30 * 60_000;   // 30 minutes between same pair+type signals
 const MAX_SIGNALS_PER_DAY  = 20;
 const SIGNAL_CACHE_TTL_MS  = 3 * 60_000;   // 3-minute result cache
@@ -95,10 +95,13 @@ class HybridSignalEngine {
     for (const symbol of pairs) {
       try {
         const sig = await this._analyzeSymbol(symbol, marketType);
-        if (sig) signals.push(sig);
+        if (sig) {
+          signals.push(sig);
+          console.log(`[HybridEngine] ${symbol}/${marketType}: ✓ signal generated (${sig.type}, conf=${sig.confidenceScore})`);
+        }
         await delay(400); // gentle on Binance rate limits
       } catch (err) {
-        console.error(`[HybridEngine] ${symbol} error: ${err.message}`);
+        console.error(`[HybridEngine] ${symbol}/${marketType}: ✗ DATA ERROR — ${err.message}`);
       }
     }
 
@@ -159,17 +162,26 @@ class HybridSignalEngine {
     ]);
 
     const h1 = mtfData['1h'];
-    if (!h1 || h1.length < 220) return null;
+    if (!h1 || h1.length < 200) {
+      console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ insufficient candles (${h1?.length ?? 0})`);
+      return null;
+    }
 
     // ── Step 2: Feature engineering ─────────────────────────────────────────
     const allFeatures  = computeAllFeatures(h1);
-    if (!allFeatures) return null;
+    if (!allFeatures) {
+      console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ feature engineering returned null`);
+      return null;
+    }
 
     let lastFeat = null;
     for (let i = allFeatures.length - 1; i >= 0; i--) {
       if (allFeatures[i]) { lastFeat = allFeatures[i]; break; }
     }
-    if (!lastFeat) return null;
+    if (!lastFeat) {
+      console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ no valid feature row`);
+      return null;
+    }
 
     // ── Step 3: AI prediction ────────────────────────────────────────────────
     const prediction = await signalModel.predict(lastFeat.normalized);
@@ -178,15 +190,24 @@ class HybridSignalEngine {
     const aiType   = buyProb > sellProb ? 'LONG' : 'SHORT';
 
     // ── Step 4: Confidence gate ─────────────────────────────────────────────
-    if (maxProb < MIN_AI_CONFIDENCE) return null;
+    if (maxProb < MIN_AI_CONFIDENCE) {
+      console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ AI confidence ${maxProb.toFixed(3)} < ${MIN_AI_CONFIDENCE} (${aiType}, src:${prediction.source})`);
+      return null;
+    }
 
     // ── Step 5: Rule-based confirmation ─────────────────────────────────────
     const rule = this._ruleConfirmation(lastFeat, h1, aiType, ticker);
-    if (rule.score < MIN_RULE_SCORE) return null;
+    if (rule.score < MIN_RULE_SCORE) {
+      console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ rule score ${rule.score.toFixed(3)} < ${MIN_RULE_SCORE} (${aiType})`);
+      return null;
+    }
 
     // ── Step 6: Multi-timeframe alignment ────────────────────────────────────
     const mtf = this._mtfAlignment(mtfData, aiType);
-    if (!mtf.aligned) return null;
+    if (!mtf.aligned) {
+      console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ MTF misaligned (${mtf.alignedCount}/${mtf.total} TFs agree, ${JSON.stringify(mtf.summary)})`);
+      return null;
+    }
 
     // ── Step 7: Futures-specific filters ────────────────────────────────────
     if (marketType === 'futures') {
@@ -388,8 +409,8 @@ class HybridSignalEngine {
       else { summary[tf] = 'neutral'; }
     }
 
-    // Need at least 2 of 3 timeframes to agree
-    return { aligned: alignedCount >= 2, alignedCount, total: checkTFs.length, summary };
+    // Need at least 1 of 3 timeframes to agree (strict 2/3 was too aggressive for ranging markets)
+    return { aligned: alignedCount >= 1, alignedCount, total: checkTFs.length, summary };
   }
 
   // ─── Persistence ─────────────────────────────────────────────────────────
