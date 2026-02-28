@@ -33,6 +33,9 @@ import hybridSignalEngine    from './services/HybridSignalEngine.js';
 import signalDeliveryService from './services/SignalDeliveryService.js';
 // JWT utils (for socket handshake verification)
 import { verifyToken } from './utils/jwt.js';
+// Technical Analysis Engine + cron sweep
+import cron from 'node-cron';
+import { sweepTopPairs } from './services/TechnicalAnalysisEngine.js';
 
 // Load environment variables
 dotenv.config();
@@ -183,11 +186,12 @@ const startServer = async () => {
     // Initialize Order Book-based Arbitrage Service
     console.log('🔄 Initializing Order Book Arbitrage Service...');
     initializeBackgroundScan({
-      minProfitPercent: 0.1,      // Minimum 0.1% net profit
-      maxSlippagePercent: 0.5,   // Maximum 0.5% slippage
-      minLiquidityScore: 40,     // Minimum liquidity score
-      orderBookDepth: 20,        // Analyze top 20 orders
-      tradeSizesToTest: [100, 500, 1000, 2500, 5000] // USD amounts to test
+      minProfitPercent: 0.1,
+      maxSlippagePercent: 0.5,
+      minLiquidityScore: 40,
+      orderBookDepth: 20,
+      tradeSizesToTest: [100, 500, 1000, 2500, 5000],
+      io, // push arbitrage:update events to connected clients after each scan
     });
     console.log('✅ Order Book Arbitrage Service initialized');
 
@@ -220,6 +224,25 @@ const startServer = async () => {
     } catch (botEngineError) {
       console.warn('⚠️  Bot engine initialization warning:', botEngineError.message);
     }
+
+    // Schedule Technical Analysis Engine background sweep (every 30 min)
+    console.log('📡 Scheduling Technical Analysis sweep (every 30 min)...');
+    cron.schedule('*/30 * * * *', async () => {
+      try {
+        console.log('[TAEngine] Background sweep starting...');
+        const signals = await sweepTopPairs('1h');
+        console.log(`[TAEngine] Sweep complete: ${signals.length} signal(s) found`);
+
+        if (signals.length > 0 && io) {
+          // Emit to premium room (instant) and free room (same sweep, free users see it delayed via their poll)
+          io.to('signals:premium').emit('signals:sweep', signals);
+          io.to('signals:free').emit('signals:sweep', signals);
+        }
+      } catch (err) {
+        console.warn('[TAEngine] Sweep error:', err.message);
+      }
+    });
+    console.log('✅ Technical Analysis sweep scheduled');
 
     // Start server
     const PORT = process.env.PORT || 5000;

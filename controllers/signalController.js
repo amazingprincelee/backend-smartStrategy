@@ -4,10 +4,11 @@
  * Delegates to HybridSignalEngine (AI + rules + multi-TF pipeline).
  */
 
-import hybridEngine   from '../services/HybridSignalEngine.js';
-import backtestEngine from '../backtesting/BacktestEngine.js';
-import SignalModel    from '../models/Signal.js';
-import BotConfig      from '../models/bot/BotConfig.js';
+import hybridEngine      from '../services/HybridSignalEngine.js';
+import backtestEngine   from '../backtesting/BacktestEngine.js';
+import SignalModel       from '../models/Signal.js';
+import BotConfig         from '../models/bot/BotConfig.js';
+import { analyzeSymbol } from '../services/TechnicalAnalysisEngine.js';
 
 // ─── GET /api/signals?type=spot|futures ──────────────────────────────────────
 
@@ -88,6 +89,33 @@ export const getSignalHistory = async (req, res) => {
   } catch (err) {
     console.error('[SignalController] getSignalHistory error:', err.message);
     return res.status(500).json({ success: false, message: 'Failed to fetch signal history' });
+  }
+};
+
+// ─── POST /api/signals/analyze  (auth required) ───────────────────────────────
+
+export const analyzeSignal = async (req, res) => {
+  try {
+    const { symbol = 'BTCUSDT', timeframe = '1h', marketType = 'spot' } = req.body;
+
+    // Normalise symbol (accept BTC/USDT, BTCUSDT, btcusdt, etc.)
+    const sym = symbol.toUpperCase().replace('/', '').replace('-', '');
+
+    if (!sym.endsWith('USDT')) {
+      return res.status(400).json({ success: false, message: 'Only USDT pairs are supported (e.g. BTCUSDT)' });
+    }
+    if (!['15m', '1h'].includes(timeframe)) {
+      return res.status(400).json({ success: false, message: 'Supported timeframes: 15m, 1h' });
+    }
+    if (!['spot', 'futures'].includes(marketType)) {
+      return res.status(400).json({ success: false, message: 'marketType must be "spot" or "futures"' });
+    }
+
+    const result = await analyzeSymbol(sym, timeframe, marketType);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[SignalController] analyzeSignal error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 

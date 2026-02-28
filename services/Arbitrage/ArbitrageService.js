@@ -28,6 +28,7 @@ let lastUpdateTime = null;
 let isCurrentlyFetching = false;
 let fetchError = null;
 let scanConfig = null;
+let _io = null; // Socket.IO instance (set by initializeBackgroundScan)
 
 // Configuration
 const UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes (order books change fast)
@@ -277,6 +278,15 @@ async function performScan(userPreferences = null) {
     cachedOpportunities = opportunities;
     lastUpdateTime = new Date();
 
+    // Push real-time update to all connected clients
+    if (_io) {
+      _io.emit('arbitrage:update', {
+        opportunities,
+        count: opportunities.length,
+        lastUpdate: lastUpdateTime.toISOString(),
+      });
+    }
+
     // Persist significant opportunities and send email alerts
     processSignificantOpportunities(opportunities);
 
@@ -357,8 +367,15 @@ export async function refreshOpportunities(userPreferences = null) {
 export function initializeBackgroundScan(config = {}) {
   console.log('\n🚀 Initializing Arbitrage Background Scanner...');
 
-  // Initialize service configuration
-  initializeService(config);
+  // Store Socket.IO instance for real-time pushes
+  if (config.io) {
+    _io = config.io;
+    console.log('   🔌 Socket.IO connected — will push arbitrage:update events');
+  }
+
+  // Initialize service configuration (exclude io from scan config)
+  const { io: _, ...scanOptions } = config;
+  initializeService(scanOptions);
 
   // Initial scan
   performScan();

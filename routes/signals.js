@@ -21,6 +21,7 @@ import {
   getStats,
   getSignalHistory,
   runBacktest,
+  analyzeSignal,
 } from '../controllers/signalController.js';
 
 const router = express.Router();
@@ -32,5 +33,6 @@ router.get('/stats',  getStats);
 // ── Authenticated endpoints ────────────────────────────────────────────────────
 router.get('/history',    protect, getSignalHistory);
 router.post('/backtest',  protect, runBacktest);
+router.post('/analyze',   protect, analyzeSignal);
 
 export default router;
