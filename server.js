@@ -10,7 +10,7 @@ import cookieParser from 'cookie-parser';
 // Import configurations and middleware
 import connectDB from './config/database.js';
 import { 
-  corsOptions, 
+  
   helmetConfig, 
   generalLimiter, 
   securityHeaders, 
@@ -53,13 +53,17 @@ const io = new Server(server, {
   allowEIO3: true,
 });
 
+app.use(cors({
+  origin: "https://smartstrategy.vercel.app"
+}));
+
+
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
 
 // CORS must run first — before Helmet — so preflight OPTIONS requests get the
 // Access-Control-Allow-Origin header before any other middleware can interfere
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // explicitly handle all preflight requests
+
 
 // Security middleware
 app.use(helmetConfig);
