@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import cors from 'cors';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import compression from 'compression';
@@ -55,14 +56,15 @@ const io = new Server(server, {
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
 
+// CORS must run first — before Helmet — so preflight OPTIONS requests get the
+// Access-Control-Allow-Origin header before any other middleware can interfere
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // explicitly handle all preflight requests
+
 // Security middleware
 app.use(helmetConfig);
 app.use(securityHeaders);
 app.use(sanitizeRequest);
-
-// CORS
-import cors from 'cors';
-app.use(cors(corsOptions));
 
 // Rate limiting
 app.use(generalLimiter);
