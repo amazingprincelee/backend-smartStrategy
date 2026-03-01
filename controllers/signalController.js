@@ -10,6 +10,60 @@ import SignalModel       from '../models/Signal.js';
 import BotConfig         from '../models/bot/BotConfig.js';
 import { analyzeSymbol } from '../services/TechnicalAnalysisEngine.js';
 
+// ─── Pair list cache (refreshed every 60 min) ────────────────────────────────
+let _pairsCache = { spot: [], futures: [], fetchedAt: 0 };
+const PAIRS_TTL = 60 * 60 * 1000; // 1 hour
+
+async function fetchGatePairs(market) {
+  const url =
+    market === 'futures'
+      ? 'https://api.gateio.ws/api/v4/futures/usdt/contracts?limit=500'
+      : 'https://api.gateio.ws/api/v4/spot/tickers';
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`Gate.io ${market} fetch failed: ${res.status}`);
+  const data = await res.json();
+
+  if (market === 'futures') {
+    // contracts: filter active USDT-settled, return pair symbol in BTCUSDT format
+    return data
+      .filter(c => !c.in_delisting)
+      .map(c => c.name.replace('_USDT', 'USDT'))   // BTC_USDT → BTCUSDT
+      .filter(s => s.endsWith('USDT'));
+  }
+
+  // spot tickers: filter USDT pairs, sort by quote_volume desc, take top 300
+  return data
+    .filter(t => t.currency_pair && t.currency_pair.endsWith('_USDT'))
+    .sort((a, b) => parseFloat(b.quote_volume || 0) - parseFloat(a.quote_volume || 0))
+    .slice(0, 300)
+    .map(t => t.currency_pair.replace('_USDT', 'USDT'));  // BTC_USDT → BTCUSDT
+}
+
+// ─── GET /api/signals/pairs?market=spot|futures ──────────────────────────────
+
+export const getAvailablePairs = async (req, res) => {
+  try {
+    const market = req.query.market === 'futures' ? 'futures' : 'spot';
+    const now    = Date.now();
+
+    if (now - _pairsCache.fetchedAt > PAIRS_TTL || _pairsCache[market].length === 0) {
+      const [spot, futures] = await Promise.allSettled([
+        fetchGatePairs('spot'),
+        fetchGatePairs('futures'),
+      ]);
+      _pairsCache.spot    = spot.status    === 'fulfilled' ? spot.value    : _pairsCache.spot;
+      _pairsCache.futures = futures.status === 'fulfilled' ? futures.value : _pairsCache.futures;
+      _pairsCache.fetchedAt = now;
+    }
+
+    return res.json({ success: true, data: _pairsCache[market] });
+  } catch (err) {
+    console.error('[SignalController] getAvailablePairs error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to fetch pairs' });
+  }
+};
+
 // ─── GET /api/signals?type=spot|futures ──────────────────────────────────────
 
 export const getSignals = async (req, res) => {

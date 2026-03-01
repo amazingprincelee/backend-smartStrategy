@@ -22,6 +22,7 @@ import {
   getSignalHistory,
   runBacktest,
   analyzeSignal,
+  getAvailablePairs,
 } from '../controllers/signalController.js';
 
 const router = express.Router();
@@ -29,6 +30,7 @@ const router = express.Router();
 // ── Public endpoints ───────────────────────────────────────────────────────────
 router.get('/',       getSignals);   // ?type=spot|futures
 router.get('/stats',  getStats);
+router.get('/pairs',  getAvailablePairs);  // ?market=spot|futures — cached 1 h
 
 // ── Authenticated endpoints ────────────────────────────────────────────────────
 router.get('/history',    protect, getSignalHistory);
