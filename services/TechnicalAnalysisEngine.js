@@ -267,17 +267,18 @@ const TOP_PAIRS_FOR_SWEEP = [
 
 /**
  * Sweep top pairs and return any generated signals.
- * @param {string} timeframe  default '1h'
- * @returns {Promise<Array>}  array of signal objects (only those with signal !== null)
+ * @param {string} timeframe   default '1h'
+ * @param {string} marketType  'spot' | 'futures'  (default 'spot')
+ * @returns {Promise<Array>}   array of signal objects (only those with signal !== null)
  */
-export async function sweepTopPairs(timeframe = '1h') {
+export async function sweepTopPairs(timeframe = '1h', marketType = 'spot') {
   const signals = [];
   for (const pair of TOP_PAIRS_FOR_SWEEP) {
     try {
-      const result = await analyzeSymbol(pair, timeframe, 'spot');
+      const result = await analyzeSymbol(pair, timeframe, marketType);
       if (result.signal) signals.push(result);
     } catch (err) {
-      console.warn(`[TAEngine] sweep skip ${pair}: ${err.message}`);
+      console.warn(`[TAEngine] sweep skip ${pair} (${marketType}): ${err.message}`);
     }
   }
   return signals;

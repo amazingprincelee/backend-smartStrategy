@@ -227,18 +227,25 @@ const startServer = async () => {
     }
 
     // Schedule Technical Analysis Engine background sweep (every 5 min)
-    console.log('📡 Scheduling Technical Analysis sweep (every 5 min)...');
+    // Runs spot + futures in parallel so both signal tabs stay populated.
+    console.log('📡 Scheduling Technical Analysis sweep (every 5 min, spot + futures)...');
     cron.schedule('*/5 * * * *', async () => {
       try {
-        console.log('[TAEngine] Background sweep starting...');
-        const signals = await sweepTopPairs('1h');
-        console.log(`[TAEngine] Sweep complete: ${signals.length} signal(s) found`);
+        console.log('[TAEngine] Background sweep starting (spot + futures)...');
+        const [spotSignals, futuresSignals] = await Promise.all([
+          sweepTopPairs('1h', 'spot'),
+          sweepTopPairs('1h', 'futures'),
+        ]);
+        const allSignals = [...spotSignals, ...futuresSignals];
+        console.log(
+          `[TAEngine] Sweep complete: ${spotSignals.length} spot + ${futuresSignals.length} futures signal(s)`
+        );
 
-        if (signals.length > 0 && io) {
-          // Persist sweep signals to DB so they survive server restarts
+        if (allSignals.length > 0 && io) {
+          // Persist all sweep signals to DB
           try {
             await SignalModel.insertMany(
-              signals.map(s => ({
+              allSignals.map(s => ({
                 pair:            s.pair,
                 type:            s.type,
                 entry:           s.entry,
@@ -254,22 +261,27 @@ const startServer = async () => {
                 reasons:         s.reasons    || [],
                 timestamp:       s.timestamp  ? new Date(s.timestamp) : new Date(),
               })),
-              { ordered: false }          // skip duplicates, don't abort on error
+              { ordered: false }
             );
           } catch (dbErr) {
-            // E11000 duplicate key — normal if cron fires twice in quick succession
             if (dbErr.code !== 11000) console.warn('[TAEngine] DB persist error:', dbErr.message);
           }
 
-          // Emit to premium room (instant) and free room
-          io.to('signals:premium').emit('signals:sweep', signals);
-          io.to('signals:free').emit('signals:sweep', signals);
+          // Emit each market's signals — frontend routes by signal.marketType
+          if (spotSignals.length > 0) {
+            io.to('signals:premium').emit('signals:sweep', spotSignals);
+            io.to('signals:free').emit('signals:sweep', spotSignals);
+          }
+          if (futuresSignals.length > 0) {
+            io.to('signals:premium').emit('signals:sweep', futuresSignals);
+            io.to('signals:free').emit('signals:sweep', futuresSignals);
+          }
         }
       } catch (err) {
         console.warn('[TAEngine] Sweep error:', err.message);
       }
     });
-    console.log('✅ Technical Analysis sweep scheduled');
+    console.log('✅ Technical Analysis sweep scheduled (spot + futures)');
 
     // Start server
     const PORT = process.env.PORT || 5000;

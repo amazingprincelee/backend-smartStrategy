@@ -70,15 +70,49 @@ export const getSignals = async (req, res) => {
   try {
     const marketType = req.query.type === 'futures' ? 'futures' : 'spot';
     let signals      = await hybridEngine.getSignals(marketType);
+    let fromDB       = false;
 
-    // If in-memory cache is empty (server restart / between sweeps),
-    // fall back to the most recent signals from DB so users always see something.
-    if (signals.length === 0) {
+    if (signals.length > 0) {
+      // Persist fresh HybridEngine signals to DB (upsert — keyed on pair+type+hour
+      // so the same signal isn't inserted twice within the same hour).
+      const hourBucket = new Date();
+      hourBucket.setMinutes(0, 0, 0);
+
+      await Promise.all(signals.map(s =>
+        SignalModel.updateOne(
+          { pair: s.pair, type: s.type, marketType, timestamp: { $gte: hourBucket } },
+          {
+            $setOnInsert: {
+              pair:            s.pair,
+              type:            s.type,
+              entry:           s.entry,
+              stopLoss:        s.stopLoss,
+              takeProfit:      s.takeProfit,
+              riskReward:      s.riskReward,
+              atr:             s.atr,
+              marketType,
+              exchange:        s.exchange   || 'binance',
+              timeframe:       s.timeframe  || '1h',
+              confidenceScore: s.confidenceScore,
+              aiProb:          s.aiProb     || null,
+              aiSource:        s.aiSource   || 'rule-based',
+              reasons:         s.reasons    || [],
+              mtfAlignment:    s.mtfAlignment ?? null,
+              timestamp:       s.timestamp  ? new Date(s.timestamp) : new Date(),
+            },
+          },
+          { upsert: true }
+        ).catch(() => {})  // fire-and-forget, never block the response
+      ));
+    } else {
+      // In-memory cache is empty (server restart / between sweeps) →
+      // fall back to the most recent DB signals so users always see something.
       signals = await SignalModel
-        .find({ marketType, status: { $in: ['active', 'hit_tp', 'hit_sl'] } })
+        .find({ marketType })
         .sort({ timestamp: -1 })
         .limit(10)
         .lean();
+      fromDB = true;
     }
 
     return res.json({
@@ -89,6 +123,7 @@ export const getSignals = async (req, res) => {
         count:      signals.length,
         timeframe:  '1h (primary)',
         aiPowered:  true,
+        fromDB,
         updatedAt:  new Date().toISOString(),
       },
     });
