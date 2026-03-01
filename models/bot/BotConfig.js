@@ -40,7 +40,7 @@ const botConfigSchema = new mongoose.Schema({
   strategyId: {
     type: String,
     required: true,
-    enum: ['adaptive_grid', 'dca', 'rsi_reversal', 'ema_crossover', 'scalper', 'breakout']
+    enum: ['adaptive_grid', 'dca', 'rsi_reversal', 'ema_crossover', 'scalper', 'breakout', 'ai_signal']
   },
   strategyParams: {
     // Adaptive Grid
@@ -67,6 +67,8 @@ const botConfigSchema = new mongoose.Schema({
     breakoutLookbackDays: { type: Number, default: 20 },
     // Scalper specific
     scalperGridSpacing: { type: Number, default: 0.004 },
+    // Futures leverage (used by DCA + AI Signal strategies)
+    leverage: { type: Number, default: 1, min: 1, max: 20 },
   },
   capitalAllocation: {
     totalCapital: { type: Number, required: true, min: 10 },

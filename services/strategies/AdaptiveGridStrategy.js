@@ -86,9 +86,13 @@ class AdaptiveGridStrategy {
 
     if (availablePortions.length === 0) return signals;
 
-    // Entry conditions (downtrend mode: buy oversold dips)
+    // Entry conditions
     const rsiOversold = params.rsiOversold || 30;
-    const rsiConditionMet = currentRSI !== null && currentRSI < rsiOversold;
+    // Strict: RSI below configured oversold level (classic oversold, default 30)
+    const rsiStrict = currentRSI !== null && currentRSI < rsiOversold;
+    // Loose: RSI below 42 in a bullish trend — catches dip-buys without waiting for RSI < 30
+    const rsiLoose  = currentRSI !== null && currentRSI < 42 && trend === 'bullish';
+    const rsiConditionMet = rsiStrict || rsiLoose;
 
     // Volume confirmation: current volume > 1.2x 20-bar average
     const avgVolume = calcVolumeMA(volumes, 20);

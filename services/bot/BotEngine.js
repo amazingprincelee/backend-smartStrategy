@@ -14,6 +14,7 @@ import rsiReversal from '../strategies/RSIReversalStrategy.js';
 import ema from '../strategies/EMAStrategy.js';
 import scalper from '../strategies/ScalperStrategy.js';
 import breakout from '../strategies/BreakoutStrategy.js';
+import aiSignal from '../strategies/AISignalStrategy.js';
 
 const STRATEGY_MAP = {
   adaptive_grid: adaptiveGrid,
@@ -21,7 +22,8 @@ const STRATEGY_MAP = {
   rsi_reversal: rsiReversal,
   ema_crossover: ema,
   scalper,
-  breakout
+  breakout,
+  ai_signal: aiSignal
 };
 
 // Timeframe per strategy (how often the tick loop fires)
@@ -31,7 +33,8 @@ const TIMEFRAME_MAP = {
   rsi_reversal: '1h',
   ema_crossover: '4h',
   scalper: '5m',
-  breakout: '1d'
+  breakout: '1d',
+  ai_signal: '1h'
 };
 
 // Tick interval in ms

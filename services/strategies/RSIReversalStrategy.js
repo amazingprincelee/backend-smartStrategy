@@ -39,10 +39,11 @@ class RSIReversalStrategy {
       }
     }
 
-    // Check entry: buy on RSI cross below oversold
-    const rsiBuySignal = prevRSI >= rsiOversold && currentRSI < rsiOversold;
-    // Or if RSI is deeply oversold (< 25)
+    // Check entry: buy on RSI cross below oversold, or when RSI is broadly oversold
+    const rsiBuySignal    = prevRSI >= rsiOversold && currentRSI < rsiOversold;
     const rsiDeeplyOversold = currentRSI < 25;
+    // Broader condition: RSI below 38 gives a chance to enter in strong-but-overbought markets
+    const rsiBroadOversold  = currentRSI < 38;
 
     const openPortionIndexes = new Set(openPositions.map(p => p.portionIndex));
     let portionIdx = -1;
@@ -50,7 +51,7 @@ class RSIReversalStrategy {
       if (!openPortionIndexes.has(i)) { portionIdx = i; break; }
     }
 
-    if ((rsiBuySignal || rsiDeeplyOversold) && portionIdx >= 0 && openPortionIndexes.size === 0) {
+    if ((rsiBuySignal || rsiDeeplyOversold || rsiBroadOversold) && portionIdx >= 0 && openPortionIndexes.size === 0) {
       const portionSize = bot.capitalAllocation.totalCapital / (params.portions || 5);
       const amount = portionSize / currentPrice;
       const stopLossPrice = currentPrice - currentATR * (params.stopLossAtrMultiplier || 2.0);

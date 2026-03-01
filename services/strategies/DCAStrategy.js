@@ -15,6 +15,9 @@ class DCAStrategy {
     const currentPrice = candles[candles.length - 1].close;
     const currentATR = candles[candles.length - 1].close * 0.02; // ~2% fallback ATR
 
+    // Leverage factor — only meaningful for futures bots
+    const leverage = bot.marketType === 'futures' ? (params.leverage || 1) : 1;
+
     // Check exit conditions for open positions
     for (const position of openPositions) {
       const pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
@@ -33,7 +36,8 @@ class DCAStrategy {
 
     if (timeSinceLastBuy >= intervalMs) {
       const dcaAmount = params.dcaAmountPerOrder || 100;
-      const amount = dcaAmount / currentPrice;
+      // For futures: dcaAmountPerOrder is the margin; leverage determines notional exposure
+      const amount = (dcaAmount * leverage) / currentPrice;
       const stopLossPrice = currentPrice * (1 - (params.stopLossAtrMultiplier || 3.0) / 100);
       const takeProfitPrice = currentPrice * (1 + (params.fixedTakeProfitPercent || 2.0) / 100);
 
