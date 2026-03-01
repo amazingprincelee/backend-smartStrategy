@@ -2,15 +2,19 @@
  * MarketDataService.js
  * Fetches multi-timeframe OHLCV data from Binance REST API.
  * Supports Spot and Futures.  Uses in-memory TTL cache per (symbol, tf, market).
- * Falls back to Bybit via CCXT when Binance is geo-blocked (403/451).
+ *
+ * Fallback chain when Binance is geo-blocked (403 / 451):
+ *   1. Binance  — primary (all hosts)
+ *   2. Gate.io  — direct REST, no CloudFront, globally accessible
+ *   3. KuCoin   — direct REST, additional fallback
  *
  * Candle format returned: { timestamp, open, high, low, close, volume }
  */
 
 import axios from 'axios';
-import ccxt  from 'ccxt';
 
-// Binance primary + fallback API hosts (tried in order on timeout/error)
+// ─── Binance hosts ────────────────────────────────────────────────────────────
+
 const BINANCE_SPOT_HOSTS = [
   'https://api.binance.com/api/v3',
   'https://api1.binance.com/api/v3',
@@ -21,105 +25,198 @@ const BINANCE_FUTURES_HOSTS = [
   'https://fapi.binance.com/fapi/v1',
 ];
 
-// Keep top-level vars for compatibility
-const BINANCE_SPOT    = BINANCE_SPOT_HOSTS[0];
 const BINANCE_FUTURES = BINANCE_FUTURES_HOSTS[0];
 
 // How many candles to fetch per timeframe (enough to warm all indicators)
 const CANDLE_LIMITS = {
-  '1m':  120,  // 2 hours of 1-min candles
-  '5m':  120,  // 10 hours of 5-min candles
-  '15m': 120,  // 30 hours of 15-min candles
-  '1h':  260,  // ~11 days  — covers EMA200 warmup
+  '1m':  120,
+  '5m':  120,
+  '15m': 120,
+  '1h':  260,  // covers EMA200 warmup
 };
 
-// Cache TTL per timeframe (refresh no sooner than one candle close)
+// Cache TTL per timeframe
 const CACHE_TTL = {
-  '1m':  55_000,         // just under 1 minute
-  '5m':  4 * 60_000,     // 4 minutes
-  '15m': 14 * 60_000,    // 14 minutes
-  '1h':  55 * 60_000,    // 55 minutes
+  '1m':  55_000,
+  '5m':  4  * 60_000,
+  '15m': 14 * 60_000,
+  '1h':  55 * 60_000,
 };
 
-const FUNDING_CACHE_TTL = 5 * 60_000; // 5 minutes
+const FUNDING_CACHE_TTL = 5 * 60_000;
 
 const http = axios.create({ timeout: 15_000 });
 
-// Retry a GET through all fallback hosts for Binance
+// ─── Binance primary ──────────────────────────────────────────────────────────
+
 async function fetchWithFallback(hosts, path, params) {
   let lastErr;
   for (const base of hosts) {
     try {
-      const res = await http.get(`${base}${path}`, { params });
-      return res;
+      return await http.get(`${base}${path}`, { params });
     } catch (err) {
       lastErr = err;
       const code = err.response?.status;
-      // Only retry on timeout or 5xx — not on 4xx (bad params won't be fixed by changing host)
-      if (code && code < 500) throw err;
+      if (code && code < 500) throw err; // 4xx → no point retrying other hosts
     }
   }
   throw lastErr;
 }
 
-// ─── Bybit fallback (used when Binance is geo-blocked 403/451) ────────────────
-
-const _bybitCache = {};
-
-function getBybitExchange(marketType) {
-  const key = marketType === 'futures' ? 'futures' : 'spot';
-  if (!_bybitCache[key]) {
-    _bybitCache[key] = new ccxt.bybit({
-      enableRateLimit: true,
-      options: { defaultType: marketType === 'futures' ? 'linear' : 'spot' },
-    });
-  }
-  return _bybitCache[key];
-}
-
-// Convert Binance symbol format to CCXT: BTCUSDT → BTC/USDT (spot) or BTC/USDT:USDT (futures)
-function toCcxtSymbol(symbol, marketType) {
-  const base = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol.slice(0, -4);
-  return marketType === 'futures' ? `${base}/USDT:USDT` : `${base}/USDT`;
-}
-
-async function fetchFromBybit(symbol, timeframe, limit, marketType) {
-  const exchange   = getBybitExchange(marketType);
-  const ccxtSymbol = toCcxtSymbol(symbol, marketType);
-  const ohlcv      = await exchange.fetchOHLCV(ccxtSymbol, timeframe, undefined, limit);
-  return ohlcv.map(k => ({
+function mapBinanceCandles(data) {
+  return data.map(k => ({
     timestamp: k[0],
-    open:      k[1],
-    high:      k[2],
-    low:       k[3],
-    close:     k[4],
-    volume:    k[5],
+    open:      parseFloat(k[1]),
+    high:      parseFloat(k[2]),
+    low:       parseFloat(k[3]),
+    close:     parseFloat(k[4]),
+    volume:    parseFloat(k[5]),
   }));
+}
+
+// ─── Gate.io fallback (direct REST — no CloudFront) ───────────────────────────
+// Supports: 1m 5m 15m 30m 1h 4h 8h 1d 7d 30d
+// Spot limit: max 1000 candles per request
+// Futures limit: max 1999 candles per request
+
+const GATEIO_SPOT_URL    = 'https://api.gateio.ws/api/v4/spot/candlesticks';
+const GATEIO_FUTURES_URL = 'https://api.gateio.ws/api/v4/futures/usdt/candlesticks';
+
+// BTCUSDT → BTC_USDT
+function toGateioSymbol(symbol) {
+  return symbol.endsWith('USDT') ? symbol.slice(0, -4) + '_USDT' : symbol;
+}
+
+async function fetchFromGateio(symbol, timeframe, limit, marketType) {
+  const pair = toGateioSymbol(symbol);
+
+  let url, params;
+  if (marketType === 'futures') {
+    url    = GATEIO_FUTURES_URL;
+    params = { contract: pair, interval: timeframe, limit };
+  } else {
+    url    = GATEIO_SPOT_URL;
+    params = { currency_pair: pair, interval: timeframe, limit };
+  }
+
+  const { data } = await http.get(url, { params });
+
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error(`Gate.io returned no candles for ${symbol} ${timeframe}`);
+  }
+
+  if (marketType === 'futures') {
+    // Futures: array of objects { t, v, c, h, l, o }
+    return data.map(k => ({
+      timestamp: parseInt(k.t)   * 1000,
+      open:      parseFloat(k.o),
+      high:      parseFloat(k.h),
+      low:       parseFloat(k.l),
+      close:     parseFloat(k.c),
+      volume:    parseFloat(k.v),
+    }));
+  }
+
+  // Spot: array of arrays [timestamp_sec, vol_quote, close, high, low, open]
+  return data.map(k => ({
+    timestamp: parseInt(k[0])  * 1000,
+    open:      parseFloat(k[5]),
+    high:      parseFloat(k[3]),
+    low:       parseFloat(k[4]),
+    close:     parseFloat(k[2]),
+    volume:    parseFloat(k[1]),
+  }));
+}
+
+// ─── KuCoin fallback (direct REST) ───────────────────────────────────────────
+// Symbol format: BTC-USDT, type: 1min/5min/15min/1hour
+
+const KUCOIN_KLINES_URL = 'https://api.kucoin.com/api/v1/market/candles';
+
+const KUCOIN_TF = {
+  '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1hour',
+};
+
+function toKucoinSymbol(symbol) {
+  return symbol.endsWith('USDT') ? symbol.slice(0, -4) + '-USDT' : symbol;
+}
+
+async function fetchFromKucoin(symbol, timeframe, limit) {
+  const type = KUCOIN_TF[timeframe] ?? '1hour';
+  const kcSymbol = toKucoinSymbol(symbol);
+
+  // KuCoin doesn't accept a 'limit' param; use startAt/endAt window
+  const endAt   = Math.floor(Date.now() / 1000);
+  const tfSec   = { '1min': 60, '5min': 300, '15min': 900, '30min': 1800, '1hour': 3600 };
+  const startAt = endAt - (limit * (tfSec[type] ?? 3600)) - 3600; // small buffer
+
+  const { data } = await http.get(KUCOIN_KLINES_URL, {
+    params: { type, symbol: kcSymbol, startAt, endAt },
+  });
+
+  if (data.code !== '200000' || !Array.isArray(data.data)) {
+    throw new Error(`KuCoin error for ${symbol} ${timeframe}`);
+  }
+
+  // KuCoin returns newest-first: [timestamp_sec, open, close, high, low, volume, turnover]
+  return data.data
+    .reverse()
+    .slice(0, limit)
+    .map(k => ({
+      timestamp: parseInt(k[0]) * 1000,
+      open:      parseFloat(k[1]),
+      high:      parseFloat(k[3]),
+      low:       parseFloat(k[4]),
+      close:     parseFloat(k[2]),
+      volume:    parseFloat(k[5]),
+    }));
+}
+
+// ─── Try all fallbacks in order ───────────────────────────────────────────────
+
+async function fetchCandlesWithFallback(symbol, timeframe, limit, marketType) {
+  const hosts = marketType === 'futures' ? BINANCE_FUTURES_HOSTS : BINANCE_SPOT_HOSTS;
+
+  // 1. Binance
+  try {
+    const { data } = await fetchWithFallback(hosts, '/klines', { symbol, interval: timeframe, limit });
+    return mapBinanceCandles(data);
+  } catch (err) {
+    const code = err.response?.status;
+    if (code !== 403 && code !== 451) throw err; // non-geo error → propagate
+    console.warn(`[MarketData] Binance geo-blocked (${code}), trying Gate.io…`);
+  }
+
+  // 2. Gate.io
+  try {
+    const candles = await fetchFromGateio(symbol, timeframe, limit, marketType);
+    console.info(`[MarketData] Gate.io OK for ${symbol} ${timeframe}`);
+    return candles;
+  } catch (gErr) {
+    console.warn(`[MarketData] Gate.io failed: ${gErr.message}, trying KuCoin…`);
+  }
+
+  // 3. KuCoin (spot only — futures not supported)
+  if (marketType !== 'futures') {
+    const candles = await fetchFromKucoin(symbol, timeframe, limit);
+    console.info(`[MarketData] KuCoin OK for ${symbol} ${timeframe}`);
+    return candles;
+  }
+
+  throw new Error(`All data sources failed for ${symbol} ${timeframe} (geo-blocked)`);
 }
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 class MarketDataService {
   constructor() {
-    /** @type {Map<string, { candles: object[], ts: number }>} */
     this._candleCache  = new Map();
-    /** @type {Map<string, { rate: number, ts: number }>} */
     this._fundingCache = new Map();
-    /** @type {Map<string, { data: object, ts: number }>} */
     this._tickerCache  = new Map();
   }
 
   // ─── Candles ─────────────────────────────────────────────────────────────
 
-  /**
-   * Fetch OHLCV for one (symbol, timeframe, market) combination.
-   * Returns cached data if still fresh.
-   *
-   * @param {string} symbol      e.g. 'BTCUSDT'
-   * @param {string} timeframe   '1m' | '5m' | '15m' | '1h'
-   * @param {'spot'|'futures'} marketType
-   * @param {number} [limit]     override default candle count
-   */
   async fetchCandles(symbol, timeframe, marketType = 'spot', limit = null) {
     const key    = `${symbol}:${timeframe}:${marketType}`;
     const cached = this._candleCache.get(key);
@@ -127,39 +224,13 @@ class MarketDataService {
 
     if (cached && Date.now() - cached.ts < ttl) return cached.candles;
 
-    const hosts = marketType === 'futures' ? BINANCE_FUTURES_HOSTS : BINANCE_SPOT_HOSTS;
-    const lim   = limit ?? CANDLE_LIMITS[timeframe] ?? 120;
-
-    let candles;
-    try {
-      const { data } = await fetchWithFallback(hosts, '/klines', { symbol, interval: timeframe, limit: lim });
-      candles = data.map(k => ({
-        timestamp: k[0],
-        open:      parseFloat(k[1]),
-        high:      parseFloat(k[2]),
-        low:       parseFloat(k[3]),
-        close:     parseFloat(k[4]),
-        volume:    parseFloat(k[5]),
-      }));
-    } catch (err) {
-      const code = err.response?.status;
-      if (code === 403 || code === 451) {
-        console.warn(`[MarketData] Binance geo-blocked (${code}), falling back to Bybit for ${symbol} ${timeframe}…`);
-        candles = await fetchFromBybit(symbol, timeframe, lim, marketType);
-      } else {
-        throw err;
-      }
-    }
+    const lim     = limit ?? CANDLE_LIMITS[timeframe] ?? 120;
+    const candles = await fetchCandlesWithFallback(symbol, timeframe, lim, marketType);
 
     this._candleCache.set(key, { candles, ts: Date.now() });
     return candles;
   }
 
-  /**
-   * Fetch candles for ALL timeframes simultaneously.
-   * Returns { '1m': [...], '5m': [...], '15m': [...], '1h': [...] }
-   * A timeframe entry is [] if the request failed.
-   */
   async fetchMultiTimeframe(symbol, marketType = 'spot') {
     const timeframes = ['1m', '5m', '15m', '1h'];
     const results    = await Promise.allSettled(
@@ -175,16 +246,12 @@ class MarketDataService {
 
   // ─── Ticker ──────────────────────────────────────────────────────────────
 
-  /**
-   * Fetch 24-hour ticker stats.
-   * Cached for 30 seconds.
-   */
   async fetchTicker(symbol, marketType = 'spot') {
     const key    = `ticker:${symbol}:${marketType}`;
     const cached = this._tickerCache.get(key);
     if (cached && Date.now() - cached.ts < 30_000) return cached.data;
 
-    const hosts  = marketType === 'futures' ? BINANCE_FUTURES_HOSTS : BINANCE_SPOT_HOSTS;
+    const hosts = marketType === 'futures' ? BINANCE_FUTURES_HOSTS : BINANCE_SPOT_HOSTS;
 
     let ticker;
     try {
@@ -199,21 +266,25 @@ class MarketDataService {
       };
     } catch (err) {
       const code = err.response?.status;
-      if (code === 403 || code === 451) {
-        console.warn(`[MarketData] Binance geo-blocked (${code}), falling back to Bybit ticker for ${symbol}…`);
-        const exchange   = getBybitExchange(marketType);
-        const ccxtSymbol = toCcxtSymbol(symbol, marketType);
-        const t          = await exchange.fetchTicker(ccxtSymbol);
+      if (code !== 403 && code !== 451) throw err;
+
+      // Fallback: Gate.io 24h ticker
+      try {
+        const pair = toGateioSymbol(symbol);
+        const { data } = await http.get(`https://api.gateio.ws/api/v4/spot/tickers`, {
+          params: { currency_pair: pair },
+        });
+        const t = Array.isArray(data) ? data[0] : data;
         ticker = {
-          lastPrice:          t.last        ?? 0,
-          priceChangePercent: t.percentage  ?? 0,
-          volume:             t.baseVolume  ?? 0,
-          quoteVolume:        t.quoteVolume ?? 0,
-          high24h:            t.high        ?? 0,
-          low24h:             t.low         ?? 0,
+          lastPrice:          parseFloat(t.last          ?? 0),
+          priceChangePercent: parseFloat(t.change_percentage ?? 0),
+          volume:             parseFloat(t.base_volume   ?? 0),
+          quoteVolume:        parseFloat(t.quote_volume  ?? 0),
+          high24h:            parseFloat(t.high_24h      ?? 0),
+          low24h:             parseFloat(t.low_24h       ?? 0),
         };
-      } else {
-        throw err;
+      } catch {
+        throw err; // propagate original error if Gate.io also fails
       }
     }
 
@@ -223,11 +294,6 @@ class MarketDataService {
 
   // ─── Funding rate (futures only) ─────────────────────────────────────────
 
-  /**
-   * Returns the latest funding rate for a futures pair.
-   * Positive = longs pay shorts (bearish pressure).
-   * Negative = shorts pay longs (bullish pressure).
-   */
   async fetchFundingRate(symbol) {
     const cached = this._fundingCache.get(symbol);
     if (cached && Date.now() - cached.ts < FUNDING_CACHE_TTL) return cached.rate;
@@ -240,37 +306,14 @@ class MarketDataService {
       this._fundingCache.set(symbol, { rate, ts: Date.now() });
       return rate;
     } catch {
-      return 0;
+      return 0; // non-critical — return neutral funding rate on error
     }
   }
 
   // ─── Extended history (for AI training / backtesting) ────────────────────
 
-  /**
-   * Fetch up to 1000 historical candles for training or backtesting.
-   * NOT cached (intended for one-off background use).
-   */
   async fetchHistoricalCandles(symbol, timeframe = '1h', limit = 1000, marketType = 'spot') {
-    const hosts  = marketType === 'futures' ? BINANCE_FUTURES_HOSTS : BINANCE_SPOT_HOSTS;
-
-    try {
-      const { data } = await fetchWithFallback(hosts, '/klines', { symbol, interval: timeframe, limit });
-      return data.map(k => ({
-        timestamp: k[0],
-        open:      parseFloat(k[1]),
-        high:      parseFloat(k[2]),
-        low:       parseFloat(k[3]),
-        close:     parseFloat(k[4]),
-        volume:    parseFloat(k[5]),
-      }));
-    } catch (err) {
-      const code = err.response?.status;
-      if (code === 403 || code === 451) {
-        console.warn(`[MarketData] Binance geo-blocked (${code}), falling back to Bybit historical for ${symbol}…`);
-        return await fetchFromBybit(symbol, timeframe, limit, marketType);
-      }
-      throw err;
-    }
+    return fetchCandlesWithFallback(symbol, timeframe, limit, marketType);
   }
 
   // ─── Cache management ─────────────────────────────────────────────────────
