@@ -33,9 +33,6 @@ import { initializeBackgroundScan } from './services/Arbitrage/ArbitrageService.
 // Bot Trading Engine
 import botEngine from './services/bot/BotEngine.js';
 import BotConfig from './models/bot/BotConfig.js';
-// Hybrid Signal Engine (AI + rules + multi-timeframe)
-import hybridSignalEngine    from './services/HybridSignalEngine.js';
-import signalDeliveryService from './services/SignalDeliveryService.js';
 // JWT utils (for socket handshake verification)
 import { verifyToken } from './utils/jwt.js';
 // Technical Analysis Engine + cron sweep
@@ -223,12 +220,6 @@ const startServer = async () => {
       io,
     });
     console.log('✅ Order Book Arbitrage Service initialized');
-
-    // Initialize Hybrid Signal Engine (AI + rules + multi-TF)
-    console.log('🧠 Initializing Hybrid Signal Engine...');
-    signalDeliveryService.setIO(io);
-    await hybridSignalEngine.init(io, signalDeliveryService);
-    console.log('✅ Hybrid Signal Engine initialized (AI model loading in background)');
 
     // Initialize Bot Trading Engine
     console.log('🤖 Initializing Bot Trading Engine...');
