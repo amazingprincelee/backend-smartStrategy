@@ -5,7 +5,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import compression from 'compression';
-import cookieParser from 'cookie-parser';
 
 // Import configurations and middleware
 import connectDB from './config/database.js';
@@ -48,20 +47,10 @@ const clientCors = {
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: clientCors,
-  path: '/socket.io/',
-  transports: ['websocket', 'polling'],
-  allowEIO3: true,
 });
 
-// CORS — set headers on every response, immediately end OPTIONS preflight
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://smartstrategy.vercel.app');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
-  if (req.method === 'OPTIONS') return res.status(204).end();
-  next();
-});
+// CORS
+app.use(cors(clientCors));
 
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
@@ -71,8 +60,6 @@ app.use(generalLimiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(cookieParser());
 
 // Compression middleware
 app.use(compression());
