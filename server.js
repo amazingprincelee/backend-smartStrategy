@@ -53,10 +53,21 @@ const io = new Server(server, {
   allowEIO3: true,
 });
 
-app.use(cors({
-  origin: "https://smartstrategy.vercel.app/"
-}));
+const clientCors = {
+  origin: [
+    'https://smartstrategy.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Requested-With'],
+  exposedHeaders: ['X-Total-Count', 'X-Rate-Limit-Remaining'],
+};
 
+// Handle preflight for all routes
+app.options('*', cors(clientCors));
+app.use(cors(clientCors));
 
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
