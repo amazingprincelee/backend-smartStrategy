@@ -9,12 +9,7 @@ import cookieParser from 'cookie-parser';
 
 // Import configurations and middleware
 import connectDB from './config/database.js';
-import {
-  helmetConfig,
-  generalLimiter,
-  securityHeaders,
-  sanitizeRequest
-} from './middleware/security.js';
+import { generalLimiter } from './middleware/security.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
 // Import routes
@@ -58,17 +53,10 @@ const io = new Server(server, {
   allowEIO3: true,
 });
 
-// Handle preflight for all routes
-app.options('*', cors(clientCors));
-app.use(cors(clientCors));
+
 
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
-
-// Security middleware
-app.use(helmetConfig);
-app.use(securityHeaders);
-app.use(sanitizeRequest);
 
 // Rate limiting
 app.use(generalLimiter);
@@ -178,6 +166,18 @@ const startServer = async () => {
     await connectDB();
     console.log('✅ Database connected successfully');
 
+    // Start listening IMMEDIATELY after DB connects so DO/cloud health checks pass.
+    // All other services init in the background — the port is open within seconds.
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, () => {
+      console.log(`\n${'='.repeat(50)}`);
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🌐 API URL: http://localhost:${PORT}/api`);
+      console.log(`🔌 Socket.IO URL: http://localhost:${PORT}`);
+      console.log(`${'='.repeat(50)}\n`);
+    });
+
     // Email service is already initialized on import
     console.log('✅ Email service initialized');
 
@@ -190,7 +190,7 @@ const startServer = async () => {
       minLiquidityScore: 10,
       orderBookDepth: 20,
       tradeSizesToTest: [25, 50, 100, 250, 500, 1000],
-      io, // push arbitrage:update events to connected clients after each scan
+      io,
     });
     console.log('✅ Order Book Arbitrage Service initialized');
 
@@ -302,27 +302,6 @@ const startServer = async () => {
       }
     });
     console.log('✅ Technical Analysis sweep scheduled (spot + futures)');
-
-    // Start server
-    const PORT = process.env.PORT || 5000;
-    server.listen(PORT, () => {
-      console.log(`\n${'='.repeat(50)}`);
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🌐 API URL: http://localhost:${PORT}/api`);
-      console.log(`🔌 Socket.IO URL: http://localhost:${PORT}`);
-      console.log(`🔌 Socket.IO Path: /socket.io/`);
-      console.log(`📊 Arbitrage Status: http://localhost:${PORT}/api/arbitrage/status`);
-      console.log(`💰 Arbitrage Opportunities: http://localhost:${PORT}/api/arbitrage/fetch-opportunity`);
-      console.log(`🤖 Bot API: http://localhost:${PORT}/api/bots`);
-      console.log(`🎮 Demo API: http://localhost:${PORT}/api/demo`);
-      console.log(`📋 Strategies: http://localhost:${PORT}/api/strategies`);
-      console.log(`🧠 Signals (spot):    http://localhost:${PORT}/api/signals?type=spot`);
-      console.log(`🧠 Signals (futures): http://localhost:${PORT}/api/signals?type=futures`);
-      console.log(`📈 Signal History:    http://localhost:${PORT}/api/signals/history`);
-      console.log(`🔬 Backtesting:       POST http://localhost:${PORT}/api/signals/backtest`);
-      console.log(`${'='.repeat(50)}\n`);
-    });
 
   } catch (error) {
     console.error('❌ Failed to start server:', error);
