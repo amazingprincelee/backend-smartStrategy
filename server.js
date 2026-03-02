@@ -67,24 +67,17 @@ const io = new Server(server, {
 
 
 
-// Trust proxy (important for rate limiting and IP detection)
-app.set('trust proxy', 1);
 
 // Rate limiting
 app.use(generalLimiter);
 
 // Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 
 // Compression middleware
 app.use(compression());
 
-// Logging middleware
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-} else {
-  app.use(morgan('combined'));
-}
+
 
 // Make io accessible to routes
 app.set('io', io);
@@ -181,9 +174,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// Error handling middleware (must be last)
-app.use(notFound);
-app.use(errorHandler);
+
 
 // Initialize services and start server
 const startServer = async () => {
