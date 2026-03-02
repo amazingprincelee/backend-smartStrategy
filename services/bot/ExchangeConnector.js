@@ -1,5 +1,10 @@
 import ccxt from 'ccxt';
 
+// Exchanges that are CloudFront geo-blocked in the server's region.
+// Any bot or demo simulator call to these will fail with a 403 before
+// a connection can be established — surface a clear error immediately.
+const GEO_BLOCKED_EXCHANGES = ['bybit', 'binance'];
+
 /**
  * ExchangeConnector - singleton CCXT connection pool.
  * Manages authenticated instances per user-exchange combination
@@ -27,8 +32,16 @@ class ExchangeConnector {
   }
 
   async _createConnection(exchangeAccount, key) {
+    const exchangeId = exchangeAccount.exchange?.toLowerCase();
+    if (GEO_BLOCKED_EXCHANGES.includes(exchangeId)) {
+      throw new Error(
+        `Exchange "${exchangeAccount.exchange}" is geo-blocked in this region (CloudFront 403). ` +
+        `Please switch this bot to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
+      );
+    }
+
     const { apiKey, apiSecret, apiPassphrase } = exchangeAccount.getDecryptedKeys();
-    const ExchangeClass = ccxt[exchangeAccount.exchange];
+    const ExchangeClass = ccxt[exchangeId];
     if (!ExchangeClass) {
       throw new Error(`Exchange "${exchangeAccount.exchange}" is not supported by CCXT`);
     }
@@ -100,16 +113,23 @@ class ExchangeConnector {
    * @returns {ccxt.Exchange}
    */
   getPublicInstance(exchangeName) {
-    if (this.publicPool.has(exchangeName)) {
-      return this.publicPool.get(exchangeName);
+    const id = exchangeName?.toLowerCase();
+    if (GEO_BLOCKED_EXCHANGES.includes(id)) {
+      throw new Error(
+        `Exchange "${exchangeName}" is geo-blocked in this region. ` +
+        `Use OKX, KuCoin, Bitget, Gate.io, or MEXC instead.`
+      );
     }
-    const ExchangeClass = ccxt[exchangeName];
+    if (this.publicPool.has(id)) {
+      return this.publicPool.get(id);
+    }
+    const ExchangeClass = ccxt[id];
     if (!ExchangeClass) {
       throw new Error(`Exchange "${exchangeName}" is not supported by CCXT`);
     }
     const pubConfig = { enableRateLimit: true, timeout: 30_000 };
     const instance = new ExchangeClass(pubConfig);
-    this.publicPool.set(exchangeName, instance);
+    this.publicPool.set(id, instance);
     return instance;
   }
 
@@ -125,16 +145,14 @@ class ExchangeConnector {
    */
   getPopularExchanges() {
     return [
-      { id: 'binance', name: 'Binance', supportsSpot: true, supportsFutures: true, needsPassphrase: false },
-      { id: 'bybit', name: 'Bybit', supportsSpot: true, supportsFutures: true, needsPassphrase: false },
-      { id: 'kucoin', name: 'KuCoin', supportsSpot: true, supportsFutures: true, needsPassphrase: true },
-      { id: 'okx', name: 'OKX', supportsSpot: true, supportsFutures: true, needsPassphrase: true },
-      { id: 'gate', name: 'Gate.io', supportsSpot: true, supportsFutures: true, needsPassphrase: false },
-      { id: 'kraken', name: 'Kraken', supportsSpot: true, supportsFutures: false, needsPassphrase: false },
-      { id: 'bitget', name: 'Bitget', supportsSpot: true, supportsFutures: true, needsPassphrase: true },
-      { id: 'mexc', name: 'MEXC', supportsSpot: true, supportsFutures: true, needsPassphrase: false },
-      { id: 'huobi', name: 'HTX (Huobi)', supportsSpot: true, supportsFutures: true, needsPassphrase: false },
-      { id: 'coinbase', name: 'Coinbase', supportsSpot: true, supportsFutures: false, needsPassphrase: false },
+      { id: 'okx',     name: 'OKX',         supportsSpot: true, supportsFutures: true,  needsPassphrase: true  },
+      { id: 'kucoin',  name: 'KuCoin',      supportsSpot: true, supportsFutures: true,  needsPassphrase: true  },
+      { id: 'bitget',  name: 'Bitget',      supportsSpot: true, supportsFutures: true,  needsPassphrase: true  },
+      { id: 'phemex',  name: 'Phemex',      supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
+      { id: 'gate',    name: 'Gate.io',     supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
+      { id: 'mexc',    name: 'MEXC',        supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
+      { id: 'huobi',   name: 'HTX (Huobi)', supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
+      { id: 'kraken',  name: 'Kraken',      supportsSpot: true, supportsFutures: false, needsPassphrase: false },
     ];
   }
 }

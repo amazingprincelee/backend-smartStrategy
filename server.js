@@ -53,8 +53,10 @@ const io = new Server(server, {
   allowEIO3: true,
 });
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.use(cors({
+  origin: "https://smartstrategy.vercel.app/"
+}));
+
 
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
@@ -197,6 +199,28 @@ const startServer = async () => {
     // Initialize Bot Trading Engine
     console.log('🤖 Initializing Bot Trading Engine...');
     botEngine.setIO(io);
+
+    // Pause any bots using geo-blocked exchanges before trying to resume them
+    const GEO_BLOCKED = ['bybit', 'binance'];
+    try {
+      const blockedBots = await BotConfig.find({
+        exchange: { $in: GEO_BLOCKED },
+        status: { $in: ['running', 'error'] }
+      });
+      for (const bot of blockedBots) {
+        await BotConfig.findByIdAndUpdate(bot._id, {
+          status: 'paused',
+          statusMessage: `Exchange "${bot.exchange}" is geo-blocked in this region. Switch to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
+        });
+        console.warn(`   ⚠️  Bot "${bot.name}" paused — ${bot.exchange} is geo-blocked`);
+      }
+      if (blockedBots.length > 0) {
+        console.log(`   ⛔ ${blockedBots.length} bot(s) paused due to geo-blocked exchange`);
+      }
+    } catch (e) {
+      console.warn('   Could not check for geo-blocked bots:', e.message);
+    }
+
     // Resume any bots that were running (or errored mid-run) when the server last shut down
     try {
       // Also recover bots stuck in 'error' — they were running before the error hit
