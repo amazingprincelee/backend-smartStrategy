@@ -9,12 +9,12 @@ import cookieParser from 'cookie-parser';
 
 // Import configurations and middleware
 import connectDB from './config/database.js';
-import { 
-  
-  helmetConfig, 
-  generalLimiter, 
-  securityHeaders, 
-  sanitizeRequest 
+import {
+  corsOptions,
+  helmetConfig,
+  generalLimiter,
+  securityHeaders,
+  sanitizeRequest
 } from './middleware/security.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
@@ -47,23 +47,14 @@ const server = createServer(app);
 
 // Initialize Socket.IO
 const io = new Server(server, {
-  cors: {
-    origin: 'https://smartstrategy.vercel.app',
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
+  cors: corsOptions,
   path: '/socket.io/',
   transports: ['websocket', 'polling'],
   allowEIO3: true,
 });
 
-app.use(cors({
-  origin: 'https://smartstrategy.vercel.app',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Origin', 'Content-Type', 'Accept', 'Authorization'],
-}));
-app.options('*', cors({ origin: 'https://smartstrategy.vercel.app', credentials: true }));
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Trust proxy (important for rate limiting and IP detection)
 app.set('trust proxy', 1);
@@ -187,11 +178,12 @@ const startServer = async () => {
     // Initialize Order Book-based Arbitrage Service
     console.log('🔄 Initializing Order Book Arbitrage Service...');
     initializeBackgroundScan({
-      minProfitPercent: 0.05,   // lowered from 0.1 — 5+ bps net profit is still real money
-      maxSlippagePercent: 0.5,
-      minLiquidityScore: 25,    // lowered from 40 — allows thinner altcoin books
+      minProfitPercent: 0.05,
+      minTradeAmountUSD: 25,
+      maxSlippagePercent: 0.8,
+      minLiquidityScore: 10,
       orderBookDepth: 20,
-      tradeSizesToTest: [100, 500, 1000, 2500, 5000],
+      tradeSizesToTest: [25, 50, 100, 250, 500, 1000],
       io, // push arbitrage:update events to connected clients after each scan
     });
     console.log('✅ Order Book Arbitrage Service initialized');
@@ -352,16 +344,22 @@ const gracefulShutdown = (signal) => {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions — only exit for truly fatal errors
 process.on('uncaughtException', (error) => {
   console.error('💥 Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
+  // Only shut down for fatal system errors, not normal operational failures
+  if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+    gracefulShutdown('uncaughtException');
+  } else {
+    console.error('⚠️  Continuing after uncaughtException (non-fatal)');
+  }
 });
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
+// Handle unhandled promise rejections — LOG ONLY, never crash the server
+// Background services (CCXT, arbitrage, market data) can reject without
+// killing the entire process — the service handles its own recovery.
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️  Unhandled Promise Rejection (non-fatal):', reason?.message || reason);
 });
 
 // Export for testing
