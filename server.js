@@ -12,7 +12,19 @@ import { generalLimiter } from './middleware/security.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
 // Import routes
-import apiRoutes from './routes/index.js';
+import authRoutes         from './routes/auth.js';
+import dashboardRoutes    from './routes/dashboard.js';
+import notificationRoutes from './routes/notifications.js';
+import adminRoutes        from './routes/admin.js';
+import userRoutes         from './routes/user.js';
+import arbitrageRoutes    from './routes/arbitrage.js';
+import exchangeRoutes     from './routes/exchange.js';
+import settingsRoutes     from './routes/settings.js';
+import botRoutes          from './routes/bot.js';
+import exchangeAccountRoutes from './routes/exchangeAccounts.js';
+import demoRoutes         from './routes/demo.js';
+import strategyRoutes     from './routes/strategies.js';
+import signalRoutes       from './routes/signals.js';
 
 // Import services
 import emailService from './utils/emailService.js';
@@ -78,8 +90,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, message: 'SmartStrategy API is running', timestamp: new Date().toISOString(), version: '2.0.0' });
+});
+
 // API routes
-app.use('/api', apiRoutes);
+app.use('/api/auth',             authRoutes);
+app.use('/api/dashboard',        dashboardRoutes);
+app.use('/api/notifications',    notificationRoutes);
+app.use('/api/admin',            adminRoutes);
+app.use('/api/user',             userRoutes);
+app.use('/api/arbitrage',        arbitrageRoutes);
+app.use('/api/exchanges',        exchangeRoutes);
+app.use('/api/settings',         settingsRoutes);
+app.use('/api/bots',             botRoutes);
+app.use('/api/exchange-accounts',exchangeAccountRoutes);
+app.use('/api/demo',             demoRoutes);
+app.use('/api/strategies',       strategyRoutes);
+app.use('/api/signals',          signalRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
