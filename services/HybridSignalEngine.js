@@ -189,6 +189,12 @@ class HybridSignalEngine {
     const maxProb  = Math.max(buyProb, sellProb);
     const aiType   = buyProb > sellProb ? 'LONG' : 'SHORT';
 
+    // Spot trading has no short-selling — skip SHORT signals for spot
+    if (marketType === 'spot' && aiType === 'SHORT') {
+      console.log(`[HybridEngine] ${symbol}/spot: ✗ SHORT signal skipped (spot cannot short)`);
+      return null;
+    }
+
     // ── Step 4: Confidence gate ─────────────────────────────────────────────
     if (maxProb < MIN_AI_CONFIDENCE) {
       console.log(`[HybridEngine] ${symbol}/${marketType}: ✗ AI confidence ${maxProb.toFixed(3)} < ${MIN_AI_CONFIDENCE} (${aiType}, src:${prediction.source})`);

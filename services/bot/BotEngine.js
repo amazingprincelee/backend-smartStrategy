@@ -161,8 +161,12 @@ class BotEngine {
       // Update unrealized P&L and trailing stops for all open positions
       for (const position of openPositions) {
         position.currentPrice = currentPrice;
-        position.unrealizedPnL = (currentPrice - position.entryPrice) * position.amount - position.entryFee;
-        position.unrealizedPnLPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+        const isShort = position.side === 'short';
+        const priceDiff = isShort
+          ? position.entryPrice - currentPrice   // SHORT profits when price falls
+          : currentPrice - position.entryPrice;  // LONG profits when price rises
+        position.unrealizedPnL = priceDiff * position.amount - position.entryFee;
+        position.unrealizedPnLPercent = (priceDiff / position.entryPrice) * 100;
         riskEngine.updateTrailingStop(position, currentPrice, bot.strategyParams);
         await position.save();
       }

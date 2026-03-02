@@ -183,7 +183,8 @@ export async function analyzeSymbol(symbol, timeframe = '1h', marketType = 'spot
   if (longScore >= MIN_SCORE && longScore > shortScore) {
     signalType = 'LONG';
     rawConf    = longScore / maxScore;
-  } else if (shortScore >= MIN_SCORE && shortScore > longScore) {
+  } else if (shortScore >= MIN_SCORE && shortScore > longScore && marketType === 'futures') {
+    // SHORT is only valid for futures — spot trading has no shorting mechanism
     signalType = 'SHORT';
     rawConf    = shortScore / maxScore;
   }

@@ -22,15 +22,21 @@ class AISignalStrategy {
     // ── 1. Check SL/TP exits for open positions ──────────────────────────────
     for (const position of openPositions) {
       const { stopLossPrice, takeProfitPrice } = position;
+      const isShort = position.side === 'short';
 
-      if (stopLossPrice && currentPrice <= stopLossPrice) {
+      // LONG: SL below entry, TP above entry
+      // SHORT: SL above entry, TP below entry
+      const hitSL = stopLossPrice && (isShort ? currentPrice >= stopLossPrice : currentPrice <= stopLossPrice);
+      const hitTP = takeProfitPrice && (isShort ? currentPrice <= takeProfitPrice : currentPrice >= takeProfitPrice);
+
+      if (hitSL) {
         signals.push({
           action: 'sell',
           positionId: position._id,
           portionIndex: position.portionIndex,
           reason: 'stop_loss'
         });
-      } else if (takeProfitPrice && currentPrice >= takeProfitPrice) {
+      } else if (hitTP) {
         signals.push({
           action: 'sell',
           positionId: position._id,
