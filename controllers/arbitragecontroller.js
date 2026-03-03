@@ -277,6 +277,49 @@ export const getPastOpportunities = async (req, res) => {
   }
 };
 
+// Summary stats for stat cards (aggregated from DB history)
+export const getPastOpportunitiesSummary = async (req, res) => {
+  try {
+    const [counts, agg] = await Promise.all([
+      // active / cleared counts
+      ArbitrageOpportunity.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      // best + avg net profit
+      ArbitrageOpportunity.aggregate([
+        {
+          $group: {
+            _id: null,
+            total:         { $sum: 1 },
+            bestProfit:    { $max: '$netProfitPercent' },
+            avgProfit:     { $avg: '$netProfitPercent' },
+          }
+        }
+      ])
+    ]);
+
+    const activeCount   = counts.find(c => c._id === 'active')?.count  || 0;
+    const clearedCount  = counts.find(c => c._id === 'cleared')?.count || 0;
+    const total         = agg[0]?.total        ?? 0;
+    const bestProfit    = agg[0]?.bestProfit   ?? null;
+    const avgProfit     = agg[0]?.avgProfit    ?? null;
+
+    res.json({
+      success: true,
+      summary: {
+        total,
+        activeCount,
+        clearedCount,
+        bestNetProfit: bestProfit !== null ? parseFloat(bestProfit.toFixed(4)) : null,
+        avgNetProfit:  avgProfit  !== null ? parseFloat(avgProfit.toFixed(4))  : null,
+      }
+    });
+  } catch (err) {
+    console.error('❌ Error fetching summary:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 // Helper function to format time
 function formatTimeSince(date) {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);

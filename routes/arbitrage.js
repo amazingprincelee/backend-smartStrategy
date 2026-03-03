@@ -7,6 +7,7 @@ import {
   updateEnabledExchanges,
   getEnabledExchanges,
   getPastOpportunities,
+  getPastOpportunitiesSummary,
 } from '../controllers/arbitragecontroller.js';
 
 const router = express.Router();
@@ -20,6 +21,9 @@ router.get('/fetch-opportunity', getArbitrageOpportunities);
 // Get stored significant opportunities (≥0.20% net profit) — history + monitoring
 // ?status=all|active|cleared  &limit=100
 router.get('/past-opportunities', getPastOpportunities);
+
+// Aggregated summary stats for stat cards (total, active, cleared, best/avg profit)
+router.get('/past-opportunities/summary', getPastOpportunitiesSummary);
 
 // Get service status
 router.get('/status', getArbitrageStatus);
