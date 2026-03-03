@@ -139,10 +139,10 @@ export const updateUserProfile = async (req, res) => {
 // Update user preferences
 export const updateUserPreferences = async (req, res) => {
   try {
-    const { emailNotifications, inAppNotifications } = req.body;
+    const { emailNotifications, inAppNotifications, theme } = req.body;
 
     const user = await User.findById(req.user.id);
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -150,10 +150,19 @@ export const updateUserPreferences = async (req, res) => {
       });
     }
 
+    // Update theme preference
+    if (theme !== undefined) {
+      const validThemes = ['light', 'dark', 'system'];
+      if (!validThemes.includes(theme)) {
+        return res.status(400).json({ success: false, message: 'Invalid theme value' });
+      }
+      user.preferences.theme = theme;
+    }
+
     // Update email notification preferences
     if (emailNotifications) {
       user.preferences.emailNotifications = {
-        ...user.preferences.emailNotifications,
+        ...user.preferences.emailNotifications.toObject?.() || user.preferences.emailNotifications,
         ...emailNotifications
       };
     }
@@ -161,7 +170,7 @@ export const updateUserPreferences = async (req, res) => {
     // Update in-app notification preferences
     if (inAppNotifications) {
       user.preferences.inAppNotifications = {
-        ...user.preferences.inAppNotifications,
+        ...user.preferences.inAppNotifications.toObject?.() || user.preferences.inAppNotifications,
         ...inAppNotifications
       };
     }

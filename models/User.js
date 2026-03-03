@@ -33,13 +33,20 @@ const userSchema = new mongoose.Schema({
     },
    
   preferences: {
+    theme: {
+      type: String,
+      enum: ['light', 'dark', 'system'],
+      default: 'system'
+    },
     emailNotifications: {
       botAlert: { type: Boolean, default: true },
+      signalAlert: { type: Boolean, default: true },
       tradeExecuted: { type: Boolean, default: true },
       platformUpdates: { type: Boolean, default: false }
     },
     inAppNotifications: {
       botAlert: { type: Boolean, default: true },
+      signalAlert: { type: Boolean, default: true },
       tradeExecuted: { type: Boolean, default: true },
       platformUpdates: { type: Boolean, default: true }
     }
