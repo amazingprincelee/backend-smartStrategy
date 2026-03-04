@@ -49,6 +49,8 @@ const ArbitrageOpportunitySchema = new mongoose.Schema(
 
     // Prevent duplicate email blasts for the same opportunity
     emailSent: { type: Boolean, default: false },
+    // Timestamp of last email sent — used for 6-hour per-opportunity cooldown
+    lastEmailedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

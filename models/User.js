@@ -42,13 +42,15 @@ const userSchema = new mongoose.Schema({
       botAlert: { type: Boolean, default: true },
       signalAlert: { type: Boolean, default: true },
       tradeExecuted: { type: Boolean, default: true },
-      platformUpdates: { type: Boolean, default: false }
+      platformUpdates: { type: Boolean, default: false },
+      arbitrageAlert: { type: Boolean, default: true }
     },
     inAppNotifications: {
       botAlert: { type: Boolean, default: true },
       signalAlert: { type: Boolean, default: true },
       tradeExecuted: { type: Boolean, default: true },
-      platformUpdates: { type: Boolean, default: true }
+      platformUpdates: { type: Boolean, default: true },
+      arbitrageAlert: { type: Boolean, default: true }
     }
   },
   lastLogin: {

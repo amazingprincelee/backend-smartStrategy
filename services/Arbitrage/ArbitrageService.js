@@ -22,6 +22,7 @@ import User from '../../models/User.js';
 import emailService from '../../utils/emailService.js';
 
 const ALERT_THRESHOLD_PERCENT = 0.20; // minimum net profit % to store + email + in-app notification
+const EMAIL_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours between emails for the same opportunity
 
 // Cache for storing opportunities
 let cachedOpportunities = [];
@@ -167,6 +168,7 @@ async function processSignificantOpportunities(opportunities) {
         newOpportunities.push(created);
       } else if (existing.status === 'cleared') {
         // Opportunity returned after being cleared → treat as new
+        // Preserve lastEmailedAt so the 6-hour cooldown still applies
         await ArbitrageOpportunity.findByIdAndUpdate(existing._id, {
           netProfitPercent:    opp.netProfitPercent,
           grossSpreadPercent:  opp.grossSpreadPercent,
@@ -181,7 +183,7 @@ async function processSignificantOpportunities(opportunities) {
           firstDetectedAt:     now,
           lastSeenAt:          now,
           clearedAt:           undefined,
-          emailSent:           false,
+          // Do NOT reset lastEmailedAt — cooldown check below decides if re-email is needed
         });
         const updated = await ArbitrageOpportunity.findById(existing._id);
         newOpportunities.push(updated);
@@ -208,27 +210,44 @@ async function processSignificantOpportunities(opportunities) {
       { status: 'cleared', clearedAt: now }
     );
 
-    // ── 3. Send email for new opportunities ───────────────────────────────
+    // ── 3. Send email for new/returned opportunities (6-hour cooldown per pair) ──
     if (newOpportunities.length > 0) {
-      console.log(`[Arbitrage] ${newOpportunities.length} new ≥${ALERT_THRESHOLD_PERCENT}% opportunit${newOpportunities.length === 1 ? 'y' : 'ies'} — emailing users`);
+      // Only email opportunities that haven't been emailed in the last 6 hours
+      const cooldownEligible = newOpportunities.filter(opp => {
+        if (!opp.lastEmailedAt) return true;
+        return (Date.now() - new Date(opp.lastEmailedAt).getTime()) >= EMAIL_COOLDOWN_MS;
+      });
 
-      const users = await User.find({
+      if (cooldownEligible.length > 0) {
+        console.log(`[Arbitrage] ${cooldownEligible.length} opportunit${cooldownEligible.length === 1 ? 'y' : 'ies'} passed 6-hour cooldown — emailing opted-in users`);
+
+        // Only email users who have arbitrageAlert enabled (default: true)
+        const users = await User.find({
           isActive: true,
           email: { $exists: true, $ne: '' },
           role: { $in: ['premium', 'admin'] },
+          'preferences.emailNotifications.arbitrageAlert': { $ne: false },
         })
         .select('email fullName')
         .lean();
 
-      if (users.length > 0) {
-        await emailService.sendArbitrageAlert(users, newOpportunities);
+        if (users.length > 0) {
+          await emailService.sendArbitrageAlert(users, cooldownEligible);
 
-        // Mark emailed
-        const emailedIds = newOpportunities.map(o => o._id);
-        await ArbitrageOpportunity.updateMany({ _id: { $in: emailedIds } }, { emailSent: true });
+          // Stamp lastEmailedAt so cooldown starts now
+          const emailedIds = cooldownEligible.map(o => o._id);
+          await ArbitrageOpportunity.updateMany(
+            { _id: { $in: emailedIds } },
+            { emailSent: true, lastEmailedAt: new Date() }
+          );
+        } else {
+          console.log('[Arbitrage] No opted-in users to email');
+        }
+      } else {
+        console.log(`[Arbitrage] ${newOpportunities.length} new opportunit${newOpportunities.length === 1 ? 'y' : 'ies'} — all within 6-hour cooldown, skipping email`);
       }
 
-      // In-app notifications (bell dropdown + browser notification) for premium/admin users
+      // In-app notifications are not subject to the email cooldown
       await emitArbitrageNotifications(newOpportunities);
     }
 
