@@ -91,8 +91,15 @@ const io = new Server(server, {
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   },
-  pingInterval: 20000,
-  pingTimeout: 60000,  // Matches ~60s proxy timeout; prevents premature disconnects
+  pingInterval: 10000,
+  pingTimeout: 30000,  // Matches ~60s proxy timeout; prevents premature disconnects
+});
+
+io.on('connection', (socket) => {
+  console.log(`Client connected: ${socket.id}`);
+  socket.on('disconnect', (reason) => {
+    console.log(`Disconnected: ${socket.id} | Reason: ${reason}`);
+  });
 });
 
 // Rate limiting
