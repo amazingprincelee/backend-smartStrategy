@@ -53,13 +53,35 @@ const server = createServer(app);
 // Trust DO's load balancer so rate limiter can read X-Forwarded-For correctly
 app.set('trust proxy', 1);
 
+// ── CORS ─────────────────────────────────────────────────────────────────────
+// Using a function instead of a static array so the server reflects the exact
+// request origin back in Access-Control-Allow-Origin.  With a plain array,
+// some versions of the `cors` package fall back to the first entry when no
+// match is found, which causes the localhost CORS error you saw.
+const ALLOWED_ORIGINS = [
+  'https://smartstrategy.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
 const clientCors = {
-  origin: 'https://smartstrategy.vercel.app',
-    
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman, server-to-server)
+    if (!origin) return callback(null, true);
+
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      // Reflect the actual request origin so the header always matches
+      callback(null, origin);
+    } else {
+      console.warn(`[CORS] Blocked request from origin: ${origin}`);
+      callback(new Error(`CORS policy: origin "${origin}" is not allowed`));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Debug: log every request with its Origin header (visible in DO logs)
 app.use((req, res, next) => {
@@ -78,9 +100,6 @@ const io = new Server(server, {
   pingTimeout: 8000,
 });
 
-
-
-
 // Rate limiting
 app.use(generalLimiter);
 
@@ -89,8 +108,6 @@ app.use(express.json());
 
 // Compression middleware
 app.use(compression());
-
-
 
 // Make io accessible to routes
 app.set('io', io);
@@ -186,8 +203,6 @@ io.on('connection', (socket) => {
     console.error('Socket error:', error);
   });
 });
-
-
 
 // Initialize services and start server
 const startServer = async () => {
