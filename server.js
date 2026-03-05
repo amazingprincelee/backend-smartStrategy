@@ -95,7 +95,7 @@ app.use(cors(clientCors));
 // Initialize Socket.IO
 // pingInterval must stay under DO's 30s proxy timeout to prevent 504s on idle polls
 const io = new Server(server, {
-  cors: 'https://smartstrategy.vercel.app/',
+  cors: 'https://smartstrategy.vercel.app',
   pingInterval: 20000,
 });
 
