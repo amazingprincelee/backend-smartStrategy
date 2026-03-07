@@ -10,7 +10,7 @@ import compression from 'compression';
 import connectDB from './config/database.js';
 import { generalLimiter } from './middleware/security.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
-
+// a litle update
 // Import routes
 import authRoutes         from './routes/auth.js';
 import dashboardRoutes    from './routes/dashboard.js';
