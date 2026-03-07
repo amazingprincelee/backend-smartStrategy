@@ -6,6 +6,7 @@ import demoSimulator from './DemoSimulator.js';
 import exchangeConnector from './ExchangeConnector.js';
 import ExchangeAccount from '../../models/ExchangeAccount.js';
 import { calculateRSI, calcVolumeMA, detectTrend } from './IndicatorEngine.js';
+import marketDataService from '../MarketDataService.js';
 
 // Strategy map
 import adaptiveGrid from '../strategies/AdaptiveGridStrategy.js';
@@ -319,7 +320,11 @@ class BotEngine {
 
   async _fetchCandles(bot, timeframe) {
     if (bot.isDemo) {
-      return await demoSimulator.getOHLCV(bot.exchange, bot.symbol, timeframe, 250);
+      // Demo bots don't execute real trades — use MarketDataService which has the
+      // Binance → Gate.io → KuCoin fallback chain so geo-blocked exchanges never
+      // break the tick.  The bot's configured exchange is logged for visibility.
+      console.log(`[BotEngine] Demo candles for "${bot.name}" (configured exchange: ${bot.exchange}) via MarketDataService`);
+      return await marketDataService.fetchCandles(bot.symbol, timeframe, bot.marketType || 'spot', 250);
     }
 
     const exchangeAccount = await ExchangeAccount

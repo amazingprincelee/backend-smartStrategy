@@ -34,6 +34,11 @@ class ExchangeConnector {
   async _createConnection(exchangeAccount, key) {
     const exchangeId = exchangeAccount.exchange?.toLowerCase();
     if (GEO_BLOCKED_EXCHANGES.includes(exchangeId)) {
+      console.warn(
+        `[GEO-BLOCK] Live bot connection refused — exchange: "${exchangeAccount.exchange}" ` +
+        `is CloudFront-blocked (403/451) in this region. ` +
+        `Switch this bot to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
+      );
       throw new Error(
         `Exchange "${exchangeAccount.exchange}" is geo-blocked in this region (CloudFront 403). ` +
         `Please switch this bot to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
@@ -115,6 +120,11 @@ class ExchangeConnector {
   getPublicInstance(exchangeName) {
     const id = exchangeName?.toLowerCase();
     if (GEO_BLOCKED_EXCHANGES.includes(id)) {
+      console.warn(
+        `[GEO-BLOCK] Public price feed refused — exchange: "${exchangeName}" ` +
+        `is CloudFront-blocked (403/451) in this region. ` +
+        `Use OKX, KuCoin, Bitget, Gate.io, or MEXC instead.`
+      );
       throw new Error(
         `Exchange "${exchangeName}" is geo-blocked in this region. ` +
         `Use OKX, KuCoin, Bitget, Gate.io, or MEXC instead.`

@@ -255,22 +255,27 @@ const startServer = async () => {
     console.log('🤖 Initializing Bot Trading Engine...');
     botEngine.setIO(io);
 
-    // Pause any bots using geo-blocked exchanges before trying to resume them
+    // Pause LIVE bots using geo-blocked exchanges before trying to resume them.
+    // Demo bots are exempt — they fetch OHLCV via MarketDataService (Gate.io fallback)
+    // and never execute real orders, so geo-blocking does not apply to them.
     const GEO_BLOCKED = ['bybit', 'binance'];
     try {
       const blockedBots = await BotConfig.find({
         exchange: { $in: GEO_BLOCKED },
-        status: { $in: ['running', 'error'] }
+        isDemo:   { $ne: true },        // ← demo bots are exempt
+        status:   { $in: ['running', 'error'] }
       });
       for (const bot of blockedBots) {
         await BotConfig.findByIdAndUpdate(bot._id, {
           status: 'paused',
           statusMessage: `Exchange "${bot.exchange}" is geo-blocked in this region. Switch to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
         });
-        console.warn(`   ⚠️  Bot "${bot.name}" paused — ${bot.exchange} is geo-blocked`);
+        console.warn(`   ⚠️  [GEO-BLOCK] Live bot "${bot.name}" paused — exchange: ${bot.exchange} (CloudFront 403 in this region)`);
       }
       if (blockedBots.length > 0) {
-        console.log(`   ⛔ ${blockedBots.length} bot(s) paused due to geo-blocked exchange`);
+        console.log(`   ⛔ ${blockedBots.length} live bot(s) paused due to geo-blocked exchange`);
+      } else {
+        console.log('   ✅ No live bots affected by geo-block');
       }
     } catch (e) {
       console.warn('   Could not check for geo-blocked bots:', e.message);
