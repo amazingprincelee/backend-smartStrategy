@@ -29,6 +29,16 @@ const appSettingsSchema = new mongoose.Schema({
   maintenanceMode: { type: Boolean, default: false },
   maintenanceMessage: { type: String, default: '' },
 
+  // Site-wide announcement banner
+  announcementActive:  { type: Boolean, default: false },
+  announcementMessage: { type: String, default: '' },
+  announcementType:    { type: String, enum: ['info', 'warning', 'success', 'error'], default: 'info' },
+  announcementExpires: { type: Date, default: null },  // auto-hide after this date
+
+  // Free trial settings
+  freeTrialDays:       { type: Number, default: 7 },
+  minWithdrawalAmount: { type: Number, default: 10 },  // minimum $USD referral withdrawal
+
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });
 

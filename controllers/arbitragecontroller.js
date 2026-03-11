@@ -256,6 +256,9 @@ export const getEnabledExchanges = async (req, res) => {
 // Get past/stored significant opportunities (≥0.20% net profit)
 export const getPastOpportunities = async (req, res) => {
   try {
+    const premium = isPremiumUser(req);
+    const FREE_PREVIEW = 3; // first 3 rows visible, rest blurred
+
     const { status = 'all', limit = 10, page = 1 } = req.query;
     const pageNum  = Math.max(1, parseInt(page)  || 1);
     const limitNum = Math.min(Math.max(1, parseInt(limit) || 10), 100);
@@ -276,14 +279,31 @@ export const getPastOpportunities = async (req, res) => {
 
     const pages = Math.ceil(filteredTotal / limitNum) || 1;
 
+    // Free users: first FREE_PREVIEW rows unmasked, rest have exchanges + financials hidden
+    const data = premium
+      ? opportunities
+      : opportunities.map((opp, i) => {
+          if (i < FREE_PREVIEW) return opp;
+          return {
+            ...opp,
+            buyExchange:       null,
+            sellExchange:      null,
+            expectedProfitUSD: null,
+            peakProfitPercent: null,
+            _gated:            true,
+          };
+        });
+
     res.json({
       success: true,
-      count: opportunities.length,
-      data: opportunities,
+      count: data.length,
+      data,
       meta: {
         activeCount,
         clearedCount,
         total: activeCount + clearedCount,
+        gated: !premium,
+        freePreview: premium ? null : FREE_PREVIEW,
       },
       pagination: {
         page:     pageNum,

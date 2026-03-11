@@ -8,7 +8,16 @@ import {
   sendBroadcastNotification,
   sendBroadcastEmail,
   getSystemHealth,
-  getAuditLogs
+  getAuditLogs,
+  // New exports
+  grantFreeTrial,
+  getRevenueAnalytics,
+  getUserAnalytics,
+  getPlatformAnalytics,
+  getRealAuditLogs,
+  sendTargetedEmail,
+  updateAnnouncement,
+  getActiveAnnouncement,
 } from '../controllers/adminController.js';
 import { adminActivatePremium } from '../controllers/paymentController.js';
 import Subscription from '../models/Subscription.js';
@@ -61,7 +70,11 @@ const broadcastLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// All admin routes require authentication and admin role
+// ── Public routes (must come BEFORE the admin auth middleware) ────────────────
+// Active announcement — readable by any logged-in user for the banner
+router.get('/announcement/active', getActiveAnnouncement);
+
+// All other admin routes require authentication and admin role
 router.use(authenticate);
 router.use(requireAdmin);
 
@@ -321,7 +334,23 @@ router.get('/subscriptions', adminLimiter, async (req, res) => {
 });
 
 // ── Manual premium activation ────────────────────────────────────────────────
-
 router.post('/activate-premium', adminActionLimiter, adminActivatePremium);
+
+// ── Free trial grant ──────────────────────────────────────────────────────────
+router.post('/grant-trial', adminActionLimiter, grantFreeTrial);
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+router.get('/analytics/revenue',  adminLimiter, getRevenueAnalytics);
+router.get('/analytics/users',    adminLimiter, getUserAnalytics);
+router.get('/analytics/platform', adminLimiter, getPlatformAnalytics);
+
+// ── Real audit log ─────────────────────────────────────────────────────────────
+router.get('/audit', adminLimiter, getRealAuditLogs);
+
+// ── Targeted email campaign ────────────────────────────────────────────────────
+router.post('/broadcast/targeted-email', broadcastLimiter, sendTargetedEmail);
+
+// ── Announcement banner ────────────────────────────────────────────────────────
+router.put('/announcement', adminActionLimiter, updateAnnouncement);
 
 export default router;

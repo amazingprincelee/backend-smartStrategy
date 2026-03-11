@@ -220,36 +220,32 @@ export const getSignalHistory = async (req, res) => {
     if (type)       filter.type = type.toUpperCase();
     if (minConfidence > 0) filter.confidenceScore = { $gte: parseFloat(minConfidence) };
 
-    // Free users: cap confidence at <0.60 and limit to 2 results from today
-    if (!premium) {
-      filter.confidenceScore = { $lt: 0.60 };
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
-      filter.timestamp = { $gte: startOfDay };
-    }
-
     const sortOrder = sort === 'confidence'
       ? { confidenceScore: -1, timestamp: -1 }
       : { timestamp: -1 };
 
-    const effectiveLimit = premium ? Math.min(parseInt(limit), 200) : 2;
+    const effectiveLimit = Math.min(parseInt(limit), 200);
 
     const [signals, total] = await Promise.all([
       SignalModel
         .find(filter)
         .sort(sortOrder)
-        .skip(premium ? parseInt(skip) : 0)
+        .skip(parseInt(skip))
         .limit(effectiveLimit)
         .lean(),
       SignalModel.countDocuments(filter),
     ]);
 
-    const result = premium ? signals : signals.map(maskSignal);
+    // Free users: first 2 rows visible, the rest blurred (so they see there's more)
+    const FREE_PREVIEW = 2;
+    const result = premium
+      ? signals
+      : signals.map((s, i) => i < FREE_PREVIEW ? s : maskSignal(s));
 
     return res.json({
       success: true,
       data:    result,
-      meta:    { total, limit: effectiveLimit, skip: premium ? parseInt(skip) : 0, gated: !premium },
+      meta:    { total, limit: effectiveLimit, skip: parseInt(skip), gated: !premium, freePreview: premium ? null : FREE_PREVIEW },
     });
   } catch (err) {
     console.error('[SignalController] getSignalHistory error:', err.message);

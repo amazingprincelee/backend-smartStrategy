@@ -21,7 +21,7 @@ router.get('/fetch-opportunity', optionalAuth, getArbitrageOpportunities);
 
 // Get stored significant opportunities (≥0.20% net profit) — history + monitoring
 // ?status=all|active|cleared  &limit=100
-router.get('/past-opportunities', getPastOpportunities);
+router.get('/past-opportunities', optionalAuth, getPastOpportunities);
 
 // Aggregated summary stats for stat cards (total, active, cleared, best/avg profit)
 router.get('/past-opportunities/summary', getPastOpportunitiesSummary);

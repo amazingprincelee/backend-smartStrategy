@@ -70,7 +70,7 @@ const userSchema = new mongoose.Schema({
   // ── Subscription ────────────────────────────────────────────────────────────
   subscription: {
     plan:            { type: String, enum: ['free', 'premium'], default: 'free' },
-    status:          { type: String, enum: ['active', 'expired', 'cancelled', 'pending'], default: 'expired' },
+    status:          { type: String, enum: ['active', 'trial', 'expired', 'cancelled', 'pending'], default: 'expired' },
     expiresAt:       { type: Date,   default: null },
     startedAt:       { type: Date,   default: null },
     paymentProvider: { type: String, enum: ['coinbase_commerce', 'nowpayments', 'cryptopay', null], default: null },
@@ -109,6 +109,9 @@ userSchema.virtual('isPremium').get(function () {
   if (this.role === 'admin') return true;
   if (this.role === 'premium') return true;
   if (this.subscription?.plan === 'premium' && this.subscription?.status === 'active') {
+    return this.subscription.expiresAt && new Date() < new Date(this.subscription.expiresAt);
+  }
+  if (this.subscription?.status === 'trial') {
     return this.subscription.expiresAt && new Date() < new Date(this.subscription.expiresAt);
   }
   return false;

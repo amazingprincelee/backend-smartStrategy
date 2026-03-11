@@ -26,6 +26,8 @@ import demoRoutes         from './routes/demo.js';
 import strategyRoutes     from './routes/strategies.js';
 import signalRoutes       from './routes/signals.js';
 import paymentRoutes      from './routes/payments.js';
+import supportRoutes     from './routes/support.js';
+import withdrawalRoutes  from './routes/withdrawals.js';
 
 // Import services
 import emailService from './utils/emailService.js';
@@ -67,6 +69,7 @@ const ALLOWED_ORIGINS = [
   'https://smartstrategy.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
+  'https://www.gate.com/',
 ];
 
 
@@ -163,6 +166,8 @@ app.use('/api/demo',             demoRoutes);
 app.use('/api/strategies',       strategyRoutes);
 app.use('/api/signals',          signalRoutes);
 app.use('/api/payments',         paymentRoutes);
+app.use('/api/support',          supportRoutes);
+app.use('/api/withdrawals',      withdrawalRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
