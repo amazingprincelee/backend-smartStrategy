@@ -278,9 +278,12 @@ class OrderManager {
 
     const exchange = await exchangeConnector.getConnection(exchangeAccount);
 
-    // Set market type for futures
+    // Set market type for futures — each exchange uses a different CCXT type name
     if (bot.marketType === 'futures') {
-      exchange.options = { ...exchange.options, defaultType: 'future' };
+      const exchangeId = bot.exchange?.toLowerCase();
+      // Bybit uses 'linear' for USDT-margined perpetuals; most others use 'future'
+      const futuresType = exchangeId === 'bybit' ? 'linear' : 'future';
+      exchange.options = { ...exchange.options, defaultType: futuresType };
     }
 
     // Resolve CCXT market symbol: after loadMarkets(), markets are keyed as 'BTC/USDT'.

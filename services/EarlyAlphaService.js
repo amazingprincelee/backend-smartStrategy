@@ -41,6 +41,58 @@ async function cgFetch(path, params = {}) {
   return res.json();
 }
 
+// Friendly display names for common exchange IDs returned by CoinGecko tickers
+const EXCHANGE_DISPLAY = {
+  binance:           'Binance',
+  gdax:              'Coinbase',
+  kraken:            'Kraken',
+  kucoin:            'KuCoin',
+  okex:              'OKX',
+  bybit_spot:        'Bybit',
+  gateio:            'Gate.io',
+  huobi:             'HTX',
+  mexc:              'MEXC',
+  bitfinex:          'Bitfinex',
+  bitstamp:          'Bitstamp',
+  bitget:            'Bitget',
+  crypto_com:        'Crypto.com',
+  upbit:             'Upbit',
+  bithumb:           'Bithumb',
+};
+
+/**
+ * Fetch the top exchanges (by converted USDT volume) for a given CoinGecko coin ID.
+ * Returns up to `limit` exchange display names.
+ * Falls back to [] on any error — exchange info is non-critical.
+ */
+async function fetchTopExchanges(cgId, limit = 3) {
+  try {
+    const data = await cgFetch(`/coins/${cgId}/tickers`, {
+      depth: 'false',
+      include_exchange_logo: 'false',
+      order: 'volume_desc',
+      page: 1,
+    });
+    const tickers = (data?.tickers || [])
+      .filter(t => t.target === 'USDT' || t.target === 'USD' || t.target === 'BTC')
+      .slice(0, limit * 2); // fetch more, dedupe by exchange
+
+    const seen = new Set();
+    const result = [];
+    for (const t of tickers) {
+      const exId = t.market?.identifier || '';
+      if (seen.has(exId)) continue;
+      seen.add(exId);
+      const name = EXCHANGE_DISPLAY[exId] || t.market?.name || exId;
+      if (name) result.push(name);
+      if (result.length >= limit) break;
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 function todayKey(symbol) {
   const d = new Date();
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}-${symbol}`;
@@ -51,7 +103,7 @@ async function alreadySaved(symbol) {
   return !!(await AlphaSignal.exists({ dateKey: key }));
 }
 
-async function saveSignal({ symbol, name, exchange = 'coingecko', score, category, reasons, price, marketCap, volume24h, volumeChange, priceChange, priceChange1h, rank }) {
+async function saveSignal({ symbol, name, exchange = 'coingecko', score, category, reasons, price, marketCap, volume24h, volumeChange, priceChange, priceChange1h, rank, exchanges = [] }) {
   if (score < MIN_SCORE) return null;
   if (await alreadySaved(symbol)) return null;
 
@@ -69,10 +121,18 @@ async function saveSignal({ symbol, name, exchange = 'coingecko', score, categor
     priceChange:   priceChange   || null,
     priceChange1h: priceChange1h || null,
     rank:          rank          || null,
+    exchanges,
     isActive: true,
     discoveredAt: new Date(),
     dateKey: todayKey(symbol),
   });
+}
+
+// Rate-limited exchange fetch: waits `delayMs` between each CG call
+// to avoid hitting the free-tier rate limit (10–30 req/min).
+async function fetchExchangesWithDelay(cgId, delayMs = 1200) {
+  await new Promise(r => setTimeout(r, delayMs));
+  return fetchTopExchanges(cgId);
 }
 
 // ─── Scanner 1: New listings (past 7 days, sorted by date_added desc) ────────
@@ -90,15 +150,11 @@ async function scanNewListings() {
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
     for (const c of coins) {
-      // CoinGecko /coins/markets doesn't expose date_added; we detect it by
-      // a very small market cap rank (new coins get ranked high once listed)
-      // combined with high 24h price change as a heuristic.
       if (!c.atl_date) continue;
       const atlDate = new Date(c.atl_date).getTime();
       if (atlDate < sevenDaysAgo) continue;
 
-      // Score components
-      let score = 55; // base: this is a newly appeared ATL (effectively new listing candidate)
+      let score = 55;
       const reasons = ['New coin detected (ATL date < 7 days ago)'];
 
       const pc24 = c.price_change_percentage_24h || 0;
@@ -111,6 +167,10 @@ async function scanNewListings() {
       if (volChange > 50) { score += 10; reasons.push('High volume-to-mcap ratio'); }
 
       const sym = (c.symbol || '').toUpperCase() + 'USDT';
+
+      // Fetch which exchanges list this coin (only if it passes score threshold)
+      const exchanges = score >= MIN_SCORE ? await fetchExchangesWithDelay(c.id) : [];
+
       const saved = await saveSignal({
         symbol: sym,
         name: c.name,
@@ -123,6 +183,7 @@ async function scanNewListings() {
         priceChange: pc24,
         priceChange1h: c.price_change_percentage_1h_in_currency,
         rank: c.market_cap_rank,
+        exchanges,
       });
       if (saved) results.push(saved);
     }
@@ -147,12 +208,15 @@ async function scanTrending() {
       if (pc > 15) { score += 15; reasons.push(`+${pc.toFixed(0)}% price surge`); }
       else if (pc > 5) { score += 8; reasons.push(`+${pc.toFixed(0)}% price movement`); }
 
-      // Small rank = more established; large rank = micro-cap (higher pump potential)
       const rank = c.market_cap_rank;
       if (rank > 200) { score += 10; reasons.push('Micro-cap — higher upside potential'); }
-      else if (rank < 20) { score -= 10; } // large caps trend for different reasons
+      else if (rank < 20) { score -= 10; }
 
       const sym = (c.symbol || '').toUpperCase() + 'USDT';
+
+      // c.id is the CoinGecko ID (e.g. "bitcoin")
+      const exchanges = score >= MIN_SCORE ? await fetchExchangesWithDelay(c.id) : [];
+
       const saved = await saveSignal({
         symbol: sym,
         name: c.name,
@@ -163,6 +227,7 @@ async function scanTrending() {
         marketCap: null,
         priceChange: pc,
         rank,
+        exchanges,
       });
       if (saved) results.push(saved);
     }
@@ -172,7 +237,7 @@ async function scanTrending() {
   return results;
 }
 
-// ─── Scanner 3: Volume spike detector (top-200 by 24h volume change) ─────────
+// ─── Scanner 3: Volume spike detector (top-100 by 24h volume) ────────────────
 async function scanVolumeSpikes() {
   const results = [];
   try {
@@ -186,11 +251,10 @@ async function scanVolumeSpikes() {
 
     for (const c of coins) {
       if (!c.total_volume || !c.market_cap || c.market_cap < 1_000_000) continue;
-      // Volume-to-market-cap ratio: >30% in a day is unusual
       const volRatio = (c.total_volume / c.market_cap) * 100;
       if (volRatio < 30) continue;
 
-      let score = 45 + Math.min(volRatio / 5, 25); // 45–70 from ratio alone
+      let score = 45 + Math.min(volRatio / 5, 25);
       const reasons = [`Volume ${volRatio.toFixed(0)}% of market cap in 24h`];
 
       const pc24 = c.price_change_percentage_24h || 0;
@@ -198,9 +262,12 @@ async function scanVolumeSpikes() {
 
       if (pc24 > 10)  { score += 15; reasons.push(`+${pc24.toFixed(0)}% 24h gain`); }
       if (pc1h > 5)   { score += 10; reasons.push(`+${pc1h.toFixed(0)}% in last 1h`); }
-      if (pc24 < -15) { score -= 20; } // strong downtrend, not an alpha opp
+      if (pc24 < -15) { score -= 20; }
 
       const sym = (c.symbol || '').toUpperCase() + 'USDT';
+
+      const exchanges = score >= MIN_SCORE ? await fetchExchangesWithDelay(c.id) : [];
+
       const saved = await saveSignal({
         symbol: sym,
         name: c.name,
@@ -214,6 +281,7 @@ async function scanVolumeSpikes() {
         priceChange: pc24,
         priceChange1h: pc1h,
         rank: c.market_cap_rank,
+        exchanges,
       });
       if (saved) results.push(saved);
     }
@@ -225,6 +293,7 @@ async function scanVolumeSpikes() {
 
 // ─── Scanner 4: Whale accumulation (unusual 1h candle on watchlist pairs) ────
 // Proxy: 1h candle volume > 3× the 20-bar average AND price up > 1%
+// MarketDataService uses Gate.io as primary fallback, so that's our exchange source.
 async function scanWhaleAccumulation() {
   const results = [];
   for (const pair of WATCHLIST_PAIRS) {
@@ -252,6 +321,10 @@ async function scanWhaleAccumulation() {
       ];
       if (volMulti > 6) { score += 10; reasons.push('Extreme volume — possible whale entry'); }
 
+      // Whale scanner uses our own market data feed (Gate.io / Binance)
+      // Show the major exchanges known to carry these top-cap pairs
+      const knownExchanges = ['Binance', 'Coinbase', 'KuCoin', 'Gate.io', 'OKX'];
+
       const saved = await saveSignal({
         symbol: pair,
         name: pair.replace('USDT', ''),
@@ -262,6 +335,7 @@ async function scanWhaleAccumulation() {
         price: lastC.close,
         volume24h: lastC.volume,
         priceChange1h: pc1h,
+        exchanges: knownExchanges.slice(0, 3), // top 3 for display
       });
       if (saved) results.push(saved);
     } catch (err) {

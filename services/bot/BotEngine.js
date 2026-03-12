@@ -375,10 +375,16 @@ class BotEngine {
 
   async _fetchCandles(bot, timeframe) {
     if (bot.isDemo) {
-      // Demo bots don't execute real trades — use MarketDataService which has the
-      // Binance → Gate.io → KuCoin fallback chain so geo-blocked exchanges never
-      // break the tick.  The bot's configured exchange is logged for visibility.
       console.log(`[BotEngine] Demo candles for "${bot.name}" (configured exchange: ${bot.exchange}) via MarketDataService`);
+      return await marketDataService.fetchCandles(bot.symbol, timeframe, bot.marketType || 'spot', 250);
+    }
+
+    // Binance and Bybit public OHLCV endpoints may be geo-blocked on the server.
+    // For these exchanges, always use MarketDataService (Gate.io → KuCoin fallback)
+    // for candle data. Order execution still uses the authenticated API directly.
+    const GEO_BLOCKED_CANDLES = ['binance', 'bybit'];
+    if (GEO_BLOCKED_CANDLES.includes(bot.exchange?.toLowerCase())) {
+      console.log(`[BotEngine] ${bot.exchange} candles via MarketDataService (geo-blocked public data)`);
       return await marketDataService.fetchCandles(bot.symbol, timeframe, bot.marketType || 'spot', 250);
     }
 
@@ -389,10 +395,20 @@ class BotEngine {
     if (!exchangeAccount) throw new Error('Exchange account not found');
 
     const exchange = await exchangeConnector.getConnection(exchangeAccount);
-    const ohlcv = await exchange.fetchOHLCV(bot.symbol, timeframe, undefined, 250);
-    return ohlcv.map(c => ({
-      timestamp: c[0], open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5]
-    }));
+
+    // Try fetching candles from the exchange; fall back to MarketDataService on failure
+    try {
+      const ohlcv = await exchange.fetchOHLCV(bot.symbol, timeframe, undefined, 250);
+      return ohlcv.map(c => ({
+        timestamp: c[0], open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5]
+      }));
+    } catch (candleErr) {
+      console.warn(
+        `[BotEngine] fetchOHLCV failed for ${bot.exchange} (${candleErr.message}) ` +
+        `— falling back to MarketDataService`
+      );
+      return await marketDataService.fetchCandles(bot.symbol, timeframe, bot.marketType || 'spot', 250);
+    }
   }
 
   _emitTrade(bot, side, price, amount, positionId, pnl = null, symbol = null) {

@@ -1,9 +1,27 @@
 import ccxt from 'ccxt';
 
-// Exchanges that are CloudFront geo-blocked in the server's region.
-// Any bot or demo simulator call to these will fail with a 403 before
-// a connection can be established — surface a clear error immediately.
-const GEO_BLOCKED_EXCHANGES = ['bybit', 'binance'];
+// Exchanges geo-blocked for PUBLIC (unauthenticated) data in the server's region.
+// CloudFront blocks these on the public REST endpoints used by MarketDataService.
+// Authenticated trading API endpoints are NOT blocked — user API-key bots can
+// connect to Binance and Bybit normally for order placement.
+const GEO_BLOCKED_PUBLIC = ['bybit', 'binance'];
+
+// Exchange-specific CCXT options
+const EXCHANGE_EXTRA_CONFIG = {
+  binance: {
+    options: {
+      defaultType: 'spot',
+      // Prevents clock-skew signature errors on Binance
+      adjustForTimeDifference: true,
+    },
+  },
+  bybit: {
+    options: {
+      // 'spot' for spot market; BotEngine overrides to 'linear' for futures
+      defaultType: 'spot',
+    },
+  },
+};
 
 /**
  * ExchangeConnector - singleton CCXT connection pool.
@@ -33,17 +51,6 @@ class ExchangeConnector {
 
   async _createConnection(exchangeAccount, key) {
     const exchangeId = exchangeAccount.exchange?.toLowerCase();
-    if (GEO_BLOCKED_EXCHANGES.includes(exchangeId)) {
-      console.warn(
-        `[GEO-BLOCK] Live bot connection refused — exchange: "${exchangeAccount.exchange}" ` +
-        `is CloudFront-blocked (403/451) in this region. ` +
-        `Switch this bot to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
-      );
-      throw new Error(
-        `Exchange "${exchangeAccount.exchange}" is geo-blocked in this region (CloudFront 403). ` +
-        `Please switch this bot to OKX, KuCoin, Bitget, Gate.io, or MEXC.`
-      );
-    }
 
     const { apiKey, apiSecret, apiPassphrase } = exchangeAccount.getDecryptedKeys();
     const ExchangeClass = ccxt[exchangeId];
@@ -51,18 +58,33 @@ class ExchangeConnector {
       throw new Error(`Exchange "${exchangeAccount.exchange}" is not supported by CCXT`);
     }
 
+    const extra = EXCHANGE_EXTRA_CONFIG[exchangeId] || {};
     const config = {
       apiKey,
       secret: apiSecret,
       enableRateLimit: true,
-      timeout: 30_000,       // 30s timeout (default CCXT is 10s — too low for slow networks)
-      options: { defaultType: 'spot' }
+      timeout: 30_000,
+      options: { defaultType: 'spot', ...(extra.options || {}) },
     };
     if (apiPassphrase) config.password = apiPassphrase;
     if (exchangeAccount.isSandbox) config.sandbox = true;
 
     const instance = new ExchangeClass(config);
-    await instance.loadMarkets();
+
+    // loadMarkets() may fail for Bybit on geo-restricted servers (CloudFront blocks
+    // the public /v5/market/instruments-info endpoint).
+    // We warn but do NOT throw — CCXT can still route orders without the market catalog
+    // as long as the caller passes the correct symbol format (which OrderManager does).
+    try {
+      await instance.loadMarkets();
+    } catch (loadErr) {
+      console.warn(
+        `[ExchangeConnector] loadMarkets() failed for ${exchangeId} — ` +
+        `may be geo-restricted on public data endpoints. Trading may still work. ` +
+        `Error: ${loadErr.message}`
+      );
+    }
+
     this.pool.set(key, instance);
     return instance;
   }
@@ -79,13 +101,12 @@ class ExchangeConnector {
         `test:${exchangeAccount._id}`
       );
       const balance = await exchange.fetchBalance();
-      // Clean up test instance
       this.pool.delete(`test:${exchangeAccount._id}`);
 
       return {
         isValid: true,
         canTrade: true,
-        canWithdraw: false, // Conservative default - never assume withdraw
+        canWithdraw: false,
         error: null,
         balanceSummary: Object.entries(balance.total || {})
           .filter(([, v]) => v > 0)
@@ -113,21 +134,21 @@ class ExchangeConnector {
 
   /**
    * Get a public (unauthenticated) exchange instance for price feeds.
-   * Used by DemoSimulator.
+   * Used by DemoSimulator. Binance/Bybit public data is geo-blocked — use
+   * MarketDataService (Gate.io → KuCoin fallback) for those instead.
    * @param {string} exchangeName - CCXT exchange id
    * @returns {ccxt.Exchange}
    */
   getPublicInstance(exchangeName) {
     const id = exchangeName?.toLowerCase();
-    if (GEO_BLOCKED_EXCHANGES.includes(id)) {
+    if (GEO_BLOCKED_PUBLIC.includes(id)) {
       console.warn(
-        `[GEO-BLOCK] Public price feed refused — exchange: "${exchangeName}" ` +
-        `is CloudFront-blocked (403/451) in this region. ` +
-        `Use OKX, KuCoin, Bitget, Gate.io, or MEXC instead.`
+        `[ExchangeConnector] Public price feed refused — "${exchangeName}" ` +
+        `has geo-blocked public data endpoints. Using MarketDataService fallback.`
       );
       throw new Error(
-        `Exchange "${exchangeName}" is geo-blocked in this region. ` +
-        `Use OKX, KuCoin, Bitget, Gate.io, or MEXC instead.`
+        `Exchange "${exchangeName}" public data is geo-restricted. ` +
+        `Use OKX, KuCoin, Bitget, Gate.io, or MEXC for price feeds.`
       );
     }
     if (this.publicPool.has(id)) {
@@ -143,29 +164,27 @@ class ExchangeConnector {
     return instance;
   }
 
-  /**
-   * Get list of all CCXT-supported exchange IDs
-   */
   getSupportedExchanges() {
     return ccxt.exchanges;
   }
 
   /**
-   * Get curated list of popular exchanges with metadata
+   * Curated list of popular exchanges — shown in Settings and CreateBot.
    */
   getPopularExchanges() {
     return [
+      { id: 'binance', name: 'Binance',     supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
+      { id: 'bybit',   name: 'Bybit',       supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
       { id: 'okx',     name: 'OKX',         supportsSpot: true, supportsFutures: true,  needsPassphrase: true  },
       { id: 'kucoin',  name: 'KuCoin',      supportsSpot: true, supportsFutures: true,  needsPassphrase: true  },
       { id: 'bitget',  name: 'Bitget',      supportsSpot: true, supportsFutures: true,  needsPassphrase: true  },
-      { id: 'phemex',  name: 'Phemex',      supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
       { id: 'gate',    name: 'Gate.io',     supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
       { id: 'mexc',    name: 'MEXC',        supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
+      { id: 'phemex',  name: 'Phemex',      supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
       { id: 'huobi',   name: 'HTX (Huobi)', supportsSpot: true, supportsFutures: true,  needsPassphrase: false },
       { id: 'kraken',  name: 'Kraken',      supportsSpot: true, supportsFutures: false, needsPassphrase: false },
     ];
   }
 }
 
-// Export as singleton
 export default new ExchangeConnector();

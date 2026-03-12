@@ -27,6 +27,9 @@ const alphaSignalSchema = new mongoose.Schema({
   priceChange1h:{ type: Number, default: null },
   rank:         { type: Number, default: null },  // CoinGecko market cap rank
 
+  // Exchanges where this coin is actively traded (top 3 by volume)
+  exchanges: [{ type: String }],
+
   // Whether this signal is still considered actionable
   isActive: { type: Boolean, default: true, index: true },
 
