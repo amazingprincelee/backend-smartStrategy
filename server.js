@@ -487,6 +487,33 @@ const startServer = async () => {
     });
     console.log('✅ Subscription expiry reminder cron scheduled (daily 9 AM UTC)');
 
+    // Subscription expiry downgrade — runs every hour.
+    // Finds premium users whose expiresAt has passed and downgrades them to 'user'.
+    cron.schedule('0 * * * *', async () => {
+      try {
+        const now = new Date();
+        const result = await User.updateMany(
+          {
+            role: 'premium',
+            'subscription.status': 'active',
+            'subscription.expiresAt': { $lt: now },
+          },
+          {
+            $set: {
+              role: 'user',
+              'subscription.status': 'expired',
+            },
+          }
+        );
+        if (result.modifiedCount > 0) {
+          console.log(`[Expiry] Downgraded ${result.modifiedCount} expired premium user(s) to free tier`);
+        }
+      } catch (err) {
+        console.warn('[Expiry] Downgrade cron error:', err.message);
+      }
+    });
+    console.log('✅ Subscription expiry downgrade cron scheduled (every hour)');
+
     // Exchange pairs preload — refresh stale (>30 days) records in background at startup.
     // Does NOT block server startup; each exchange logs when done.
     console.log('📋 Refreshing exchange pairs in background (stale records only)...');
