@@ -7,6 +7,7 @@
 import hybridEngine      from '../services/HybridSignalEngine.js';
 import backtestEngine   from '../backtesting/BacktestEngine.js';
 import SignalModel       from '../models/Signal.js';
+import AlphaSignal      from '../models/AlphaSignal.js';
 import BotConfig         from '../models/bot/BotConfig.js';
 import { analyzeSymbol } from '../services/TechnicalAnalysisEngine.js';
 import ExchangePairs     from '../models/ExchangePairs.js';
@@ -184,15 +185,19 @@ export const getSignals = async (req, res) => {
 
 export const getStats = async (req, res) => {
   try {
-    const [signalStats, totalBots, activeBots] = await Promise.all([
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const [signalStats, totalBots, activeBots, alphaSignals] = await Promise.all([
       hybridEngine.getPlatformStats(),
       BotConfig.countDocuments().catch(() => 0),
       BotConfig.countDocuments({ status: 'running' }).catch(() => 0),
+      AlphaSignal.countDocuments({ discoveredAt: { $gte: todayStart } }).catch(() => 0),
     ]);
 
     return res.json({
       success: true,
-      data: { ...signalStats, totalBots, activeBots },
+      data: { ...signalStats, totalBots, activeBots, alphaSignals },
     });
   } catch (err) {
     console.error('[SignalController] getStats error:', err.message);

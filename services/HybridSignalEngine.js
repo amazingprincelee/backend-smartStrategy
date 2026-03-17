@@ -147,7 +147,7 @@ class HybridSignalEngine {
       const totalSignalsToday = Math.max(this._todayCount(), dbCountToday);
 
       const stats = {
-        activeSignals:      all.length,
+        activeSignals:      totalSignalsToday,   // DB-backed — survives restarts
         buySignals:         all.filter(s => s.type === 'LONG').length,
         sellSignals:        all.filter(s => s.type === 'SHORT').length,
         neutralSignals:     0,
