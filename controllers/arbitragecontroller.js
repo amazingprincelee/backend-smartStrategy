@@ -259,12 +259,17 @@ export const getPastOpportunities = async (req, res) => {
     const premium = isPremiumUser(req);
     const FREE_PREVIEW = 3; // first 3 rows visible, rest blurred
 
-    const { status = 'all', limit = 10, page = 1 } = req.query;
+    const { status = 'all', transferStatus = 'all', limit = 10, page = 1 } = req.query;
     const pageNum  = Math.max(1, parseInt(page)  || 1);
     const limitNum = Math.min(Math.max(1, parseInt(limit) || 10), 100);
     const skip     = (pageNum - 1) * limitNum;
 
-    const query = status !== 'all' ? { status } : {};
+    const query = {};
+    if (status !== 'all') query.status = status;
+    const VALID_TRANSFER = ['Verified', 'Blocked', 'Unknown', 'Unverified'];
+    if (transferStatus !== 'all' && VALID_TRANSFER.includes(transferStatus)) {
+      query.transferStatus = transferStatus;
+    }
 
     const [opportunities, filteredTotal, activeCount, clearedCount] = await Promise.all([
       ArbitrageOpportunity.find(query)
