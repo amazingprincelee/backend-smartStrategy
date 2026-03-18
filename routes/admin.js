@@ -49,6 +49,23 @@ const broadcastLimiter = rateLimit({
 // ── Public routes (BEFORE auth middleware) ───────────────────────────────────
 router.get('/announcement/active', getActiveAnnouncement);
 
+// Public plan info — returns only safe, non-sensitive fields
+router.get('/public-settings', async (req, res) => {
+  try {
+    const settings = await getSettings();
+    res.json({
+      success: true,
+      data: {
+        premiumPriceUSD:    settings.premiumPriceUSD,
+        premiumDurationDays: settings.premiumDurationDays,
+        referralRewardUSD:  settings.referralRewardUSD,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 // ── All routes below require admin auth ───────────────────────────────────────
 router.use(authenticate);
 router.use(requireAdmin);
