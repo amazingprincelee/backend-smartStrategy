@@ -214,6 +214,7 @@ export const getSignalHistory = async (req, res) => {
     const {
       marketType,
       type,
+      pair,
       minConfidence = 0,
       sort   = 'newest',   // 'newest' | 'confidence'
       limit  = 50,
@@ -223,6 +224,7 @@ export const getSignalHistory = async (req, res) => {
     const filter = {};
     if (marketType) filter.marketType = marketType;
     if (type)       filter.type = type.toUpperCase();
+    if (pair)       filter.pair = { $regex: pair.toUpperCase().replace('/', ''), $options: 'i' };
     if (minConfidence > 0) filter.confidenceScore = { $gte: parseFloat(minConfidence) };
 
     const sortOrder = sort === 'confidence'
