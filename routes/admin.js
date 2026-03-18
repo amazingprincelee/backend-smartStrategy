@@ -58,7 +58,8 @@ router.get('/public-settings', async (req, res) => {
       data: {
         premiumPriceUSD:    settings.premiumPriceUSD,
         premiumDurationDays: settings.premiumDurationDays,
-        referralRewardUSD:  settings.referralRewardUSD,
+        referralRewardPercent: settings.referralRewardPercent,
+        referralRewardUSD: Math.round((settings.premiumPriceUSD * (settings.referralRewardPercent ?? 25) / 100) * 100) / 100,
       },
     });
   } catch (e) {
@@ -103,7 +104,7 @@ router.put('/settings', adminActionLimiter, async (req, res) => {
   try {
     const allowed = [
       'activePaymentProvider', 'premiumPriceUSD', 'premiumDurationDays',
-      'referralRewardUSD', 'freeSignalsPerDay', 'freeSignalMaxConfidence',
+      'referralRewardPercent', 'freeSignalsPerDay', 'freeSignalMaxConfidence',
       'freeArbitrageLimit', 'freeArbitrageMaxProfit', 'maintenanceMode',
       'freeTrialDays', 'minWithdrawalAmount',
     ];

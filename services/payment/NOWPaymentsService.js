@@ -37,7 +37,7 @@ class NOWPaymentsService {
       price_amount:    amountUSD,
       price_currency:  'usd',
       order_id:        `user-${userId}-${Date.now()}`,
-      order_description: description || 'SmartStrategy Premium — $20/month',
+      order_description: description || 'SmartStrategy Premium — $29/month',
       ipn_callback_url:  `${process.env.SERVER_URL || 'http://localhost:5000'}/api/payments/webhook/nowpayments`,
       success_url:       `${process.env.CLIENT_URL}/payment/success`,
       cancel_url:        `${process.env.CLIENT_URL}/pricing`,

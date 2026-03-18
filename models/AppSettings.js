@@ -15,9 +15,9 @@ const appSettingsSchema = new mongoose.Schema({
   },
 
   // Pricing
-  premiumPriceUSD: { type: Number, default: 20 },
+  premiumPriceUSD: { type: Number, default: 29 },
   premiumDurationDays: { type: Number, default: 30 },
-  referralRewardUSD: { type: Number, default: 5 },
+  referralRewardPercent: { type: Number, default: 25 }, // % of plan price; 25% of $29 = $7.25
 
   // Feature limits for free tier
   freeSignalsPerDay:        { type: Number, default: 2 },

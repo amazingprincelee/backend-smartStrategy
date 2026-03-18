@@ -30,13 +30,13 @@ class CoinbaseCommerceService {
   }
 
   /**
-   * Create a one-time charge for $20 premium subscription.
+   * Create a one-time charge for $29 premium subscription.
    * Returns { chargeId, chargeCode, paymentUrl }
    */
   async createCharge({ userId, userEmail, amountUSD, description, metadata = {} }) {
     const charge = await this._request('POST', '/charges', {
       name:        'SmartStrategy Premium',
-      description: description || 'Monthly Premium Subscription — $20/month',
+      description: description || 'Monthly Premium Subscription — $29/month',
       pricing_type: 'fixed_price',
       local_price:  { amount: String(amountUSD), currency: 'USD' },
       metadata:     { userId: String(userId), email: userEmail, ...metadata },

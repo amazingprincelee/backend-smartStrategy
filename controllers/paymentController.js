@@ -31,13 +31,29 @@ export const createCheckout = async (req, res) => {
     const isActive = user.subscription?.status === 'active' &&
       user.subscription?.expiresAt && new Date() < new Date(user.subscription.expiresAt);
 
-    const amountUSD = settings.premiumPriceUSD;
+    const planPrice     = settings.premiumPriceUSD;
+    const creditsToApply = Math.min(user.credits || 0, planPrice);
+    const amountUSD     = Math.max(0, planPrice - creditsToApply);
+
+    // If credits cover the full price, activate directly without payment
+    if (amountUSD === 0) {
+      await User.findByIdAndUpdate(user._id, { $inc: { credits: -creditsToApply } });
+      const { newExpiry } = await activatePremiumInternal(user._id, `credits-${Date.now()}`, 'credits', null, settings, creditsToApply);
+      return res.json({ success: true, data: { activated: true, creditsApplied: creditsToApply, expiresAt: newExpiry } });
+    }
+
+    // Deduct credits now — they are consumed at checkout
+    if (creditsToApply > 0) {
+      await User.findByIdAndUpdate(user._id, { $inc: { credits: -creditsToApply } });
+    }
 
     const charge = await provider.createCharge({
       userId:     user._id,
       userEmail:  user.email,
       amountUSD,
-      description: `SmartStrategy Premium — $${amountUSD}/month`,
+      description: creditsToApply > 0
+        ? `SmartStrategy Premium — $${planPrice}/month ($${creditsToApply} credit applied)`
+        : `SmartStrategy Premium — $${planPrice}/month`,
       metadata: { referralCode: user.referral?.referredBy || null },
     });
 
@@ -50,6 +66,7 @@ export const createCheckout = async (req, res) => {
       chargeCode: charge.chargeCode || null,
       paymentUrl: charge.paymentUrl,
       amountUSD,
+      creditsApplied: creditsToApply,
       status:    'pending',
     });
 
@@ -63,6 +80,10 @@ export const createCheckout = async (req, res) => {
 // ─── Shared: activate premium after confirmed payment ─────────────────────────
 async function activatePremium(userId, chargeId, provider, webhookPayload = null) {
   const settings = await getSettings();
+  return activatePremiumInternal(userId, chargeId, provider, webhookPayload, settings, 0);
+}
+
+async function activatePremiumInternal(userId, chargeId, provider, webhookPayload, settings, creditsApplied = 0) {
   const daysToAdd = settings.premiumDurationDays || 30;
 
   const user = await User.findById(userId);
@@ -99,12 +120,12 @@ async function activatePremium(userId, chargeId, provider, webhookPayload = null
   if (sub && !sub.referralRewarded && user.referral?.referredBy) {
     const referrer = await User.findOne({ 'referral.code': user.referral.referredBy });
     if (referrer) {
-      const reward = settings.referralRewardUSD || 5;
+      const percent = settings.referralRewardPercent ?? 25;
+      const reward  = Math.round((settings.premiumPriceUSD * percent / 100) * 100) / 100;
       await User.findByIdAndUpdate(referrer._id, {
         $inc: {
-          credits:                 reward,
-          'referral.totalEarned':  reward,
-          'referral.pendingCredit': reward,
+          credits:                reward,
+          'referral.totalEarned': reward,
         },
       });
       await Subscription.findByIdAndUpdate(sub._id, {
@@ -115,7 +136,7 @@ async function activatePremium(userId, chargeId, provider, webhookPayload = null
       try {
         await emailService.sendEmail(
           referrer.email,
-          '🎉 You earned a $5 referral reward!',
+          `🎉 You earned a $${reward} referral reward!`,
           `<p>Hi ${referrer.fullName || 'there'},</p>
            <p>Someone you referred just subscribed to SmartStrategy Premium! You've earned a <strong>$${reward} credit</strong>.</p>
            <p>Your new credit balance: <strong>$${(referrer.credits || 0) + reward}</strong></p>`,
@@ -226,12 +247,10 @@ export const getSubscriptionStatus = async (req, res) => {
         role:         user.role,
         subscription: user.subscription,
         credits:      user.credits || 0,
-        referralCode: user.referral?.code,
-        referralCount: user.referral?.referrals?.length || 0,
-        totalEarned:  user.referral?.totalEarned || 0,
+        referral:     user.referral,
         priceUSD:     settings.premiumPriceUSD,
         activeProvider: settings.activePaymentProvider,
-        history,
+        paymentHistory: history,
       },
     });
   } catch (err) {

@@ -14,7 +14,7 @@ const subscriptionSchema = new mongoose.Schema({
   chargeCode: { type: String },                          // Coinbase short code
   paymentUrl: { type: String },                          // redirect URL for user
 
-  amountUSD:    { type: Number, default: 20 },
+  amountUSD:    { type: Number, default: 29 },
   currency:     { type: String, default: 'USD' },        // crypto currency paid in
   amountCrypto: { type: Number, default: null },
   txHash:       { type: String, default: null },         // blockchain tx
@@ -29,6 +29,9 @@ const subscriptionSchema = new mongoose.Schema({
   // Subscription period granted by this payment
   planStartAt:  { type: Date, default: null },
   planEndAt:    { type: Date, default: null },
+
+  // Credits applied from referral bonus at checkout
+  creditsApplied: { type: Number, default: 0 },
 
   // Referral tracking — did this payment trigger a referral reward?
   referralRewarded: { type: Boolean, default: false },
