@@ -39,6 +39,6 @@ router.get('/all-exchange-pairs', getAllExchangePairs);
 // ── Authenticated endpoints ────────────────────────────────────────────────────
 router.get('/history',    protect, getSignalHistory);          // gated in controller
 router.post('/backtest',  protect, requirePremium, runBacktest);  // premium only
-router.post('/analyze',   protect, requirePremium, analyzeSignal); // premium only
+router.post('/analyze',   protect, analyzeSignal); // free: 3 signal results/day (frontend-counted); premium: unlimited
 
 export default router;
