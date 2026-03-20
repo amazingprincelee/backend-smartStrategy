@@ -16,6 +16,7 @@ router.get('/:id/trades', botController.getBotTrades);
 router.get('/:id/positions', botController.getBotPositions);
 router.get('/:id/pending-signals', botController.getPendingSignals);
 router.post('/:id/execute-signal', botController.executeSignal);
+router.post('/:id/positions/:positionId/close', botController.closePosition);
 router.post('/quick-execute', botController.quickExecute);
 
 export default router;

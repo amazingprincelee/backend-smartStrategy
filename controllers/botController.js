@@ -254,6 +254,58 @@ export const getBotPositions = async (req, res) => {
 };
 
 /**
+ * POST /api/bots/:id/positions/:positionId/close
+ * Manually close an open position and realize P&L.
+ */
+export const closePosition = async (req, res) => {
+  try {
+    const bot = await BotConfig.findOne({ _id: req.params.id, userId: req.user.id });
+    if (!bot) return res.status(404).json({ success: false, message: 'Bot not found' });
+
+    const position = await Position.findOne({ _id: req.params.positionId, botId: bot._id, status: 'open' });
+    if (!position) return res.status(404).json({ success: false, message: 'Position not found or already closed' });
+
+    const closePrice = position.currentPrice || position.entryPrice;
+    const realizedPnl = (closePrice - position.entryPrice) * (position.amount || 0) - (position.entryFee || 0);
+
+    // For live trading — place market close order on exchange
+    if (!bot.isDemo && bot.exchangeAccountId) {
+      try {
+        const ExchangeAccount = (await import('../models/ExchangeAccount.js')).default;
+        const account = await ExchangeAccount.findById(bot.exchangeAccountId);
+        if (account) {
+          const { default: ccxt } = await import('ccxt');
+          const ExchangeClass = ccxt[account.exchange];
+          if (ExchangeClass) {
+            const exchange = new ExchangeClass({ apiKey: account.apiKey, secret: account.apiSecret, enableRateLimit: true });
+            const side = position.side === 'long' ? 'sell' : 'buy';
+            await exchange.createMarketOrder(position.symbol, side, position.amount);
+          }
+        }
+      } catch (exchErr) {
+        // Log but don't fail — still close in DB
+        console.warn('[closePosition] exchange order failed:', exchErr.message);
+      }
+    }
+
+    // Mark closed in DB
+    position.status      = 'closed';
+    position.closePrice  = closePrice;
+    position.realizedPnL = realizedPnl;
+    position.closedAt    = new Date();
+    position.closeReason = 'manual';
+    await position.save();
+
+    // Update bot stats
+    await BotConfig.findByIdAndUpdate(bot._id, { $inc: { 'stats.totalPnL': realizedPnl } });
+
+    res.json({ success: true, data: { realizedPnl, closePrice } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
  * GET /api/bots/:id/pending-signals
  * Returns top 3 scored signals waiting for manual execution.
  */
