@@ -42,6 +42,40 @@ const botConfigSchema = new mongoose.Schema({
     required: true,
     enum: ['smart_signal', 'ai_signal']
   },
+
+  // ── Execution mode ──────────────────────────────────────────────────────
+  // auto:   bot selects and executes the best scored signal automatically
+  // manual: bot presents top 3 signals to user; user picks which to execute
+  executionMode: {
+    type: String,
+    enum: ['auto', 'manual'],
+    default: 'auto'
+  },
+
+  // Pending signals waiting for manual execution (manual mode only)
+  pendingSignals: {
+    type: [{
+      signalId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Signal' },
+      pair:        String,
+      type:        String,  // LONG | SHORT
+      entry:       Number,
+      stopLoss:    Number,
+      takeProfit:  Number,
+      score:       Number,
+      breakdown:   mongoose.Schema.Types.Mixed,
+      reasons:     [String],
+      confidenceScore: Number,
+      marketType:  String,
+      expiresAt:   Date,    // auto-expire pending signals after 2h
+    }],
+    default: []
+  },
+
+  // Cooldown: don't open new trades until this time passes
+  cooldownUntil: { type: Date, default: null },
+
+  // Minutes to wait between trades (0 = no cooldown)
+  cooldownMinutes: { type: Number, default: 30 },
   strategyParams: {
     // Adaptive Grid
     portions: { type: Number, default: 5 },

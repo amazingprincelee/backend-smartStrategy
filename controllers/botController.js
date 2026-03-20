@@ -2,8 +2,13 @@ import BotConfig from '../models/bot/BotConfig.js';
 import Trade from '../models/bot/Trade.js';
 import Position from '../models/bot/Position.js';
 import ExchangeAccount from '../models/ExchangeAccount.js';
+import Signal from '../models/Signal.js';
 import botEngine from '../services/bot/BotEngine.js';
 import demoSimulator from '../services/bot/DemoSimulator.js';
+import orderManager from '../services/bot/OrderManager.js';
+import marketDataService from '../services/MarketDataService.js';
+import scoringEngine from '../services/SignalScoringEngine.js';
+import pairConflictGuard from '../services/PairConflictGuard.js';
 
 /**
  * GET /api/bots
@@ -36,7 +41,7 @@ export const createBot = async (req, res) => {
     const {
       name, exchange, symbol, marketType, strategyId,
       strategyParams, capitalAllocation, riskParams,
-      exchangeAccountId, isDemo
+      exchangeAccountId, isDemo, executionMode, cooldownMinutes
     } = req.body;
 
     if (!name || !exchange || !symbol || !strategyId || !capitalAllocation?.totalCapital) {
@@ -69,6 +74,8 @@ export const createBot = async (req, res) => {
       symbol: symbol.toUpperCase(),
       marketType: marketType || 'spot',
       strategyId,
+      executionMode: executionMode || 'auto',
+      cooldownMinutes: cooldownMinutes ?? 30,
       strategyParams: strategyParams || {},
       capitalAllocation,
       riskParams: riskParams || {},
@@ -241,6 +248,238 @@ export const getBotPositions = async (req, res) => {
       .limit(50);
 
     res.json({ success: true, data: { positions } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /api/bots/:id/pending-signals
+ * Returns top 3 scored signals waiting for manual execution.
+ */
+export const getPendingSignals = async (req, res) => {
+  try {
+    const bot = await BotConfig.findOne({ _id: req.params.id, userId: req.user.id });
+    if (!bot) return res.status(404).json({ success: false, message: 'Bot not found' });
+
+    // Filter out expired pending signals
+    const now     = new Date();
+    const pending = (bot.pendingSignals || []).filter(s => !s.expiresAt || new Date(s.expiresAt) > now);
+
+    res.json({ success: true, data: { pendingSignals: pending, executionMode: bot.executionMode } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/bots/:id/execute-signal
+ * User manually triggers execution of a pending signal.
+ * Body: { signalId }
+ */
+export const executeSignal = async (req, res) => {
+  try {
+    const bot = await BotConfig.findOne({ _id: req.params.id, userId: req.user.id });
+    if (!bot) return res.status(404).json({ success: false, message: 'Bot not found' });
+    if (bot.executionMode !== 'manual') return res.status(400).json({ success: false, message: 'Bot is not in manual mode' });
+
+    const { signalId } = req.body;
+    const pending = (bot.pendingSignals || []).find(s => s.signalId?.toString() === signalId);
+    if (!pending) return res.status(404).json({ success: false, message: 'Signal not found or expired' });
+
+    // Pair conflict check
+    const conflict = await pairConflictGuard.checkPairConflict(req.user.id, pending.pair, bot._id);
+    if (conflict.hasConflict) {
+      return res.json({
+        success: false,
+        conflict: true,
+        message: `${conflict.botName} already has an open ${conflict.positionSide} position on ${pending.pair}. Proceeding will increase your exposure.`,
+        conflict_info: conflict,
+      });
+    }
+
+    // Fetch live price for accurate sizing
+    const tradeSymbol = pending.pair.replace('/', '');
+    const marketType  = pending.marketType || bot.marketType || 'spot';
+    let livePrice = pending.entry;
+    try {
+      const ticker = await marketDataService.fetchTicker(tradeSymbol, marketType);
+      livePrice = ticker.lastPrice;
+    } catch {
+      console.warn(`[executeSignal] Could not fetch live price for ${tradeSymbol}`);
+    }
+
+    // Price drift check
+    const drift = Math.abs(livePrice - pending.entry) / pending.entry * 100;
+    if (drift > 2.0) {
+      return res.status(400).json({
+        success: false,
+        message: `Price has moved ${drift.toFixed(1)}% from the signal entry. Signal may be stale — please wait for a fresh signal.`,
+      });
+    }
+
+    // ATR-based position sizing
+    const params       = bot.strategyParams || {};
+    const riskPct      = params.riskPerTrade || 2;
+    const leverage     = marketType === 'futures' ? (params.leverage || 1) : 1;
+    const capital      = bot.capitalAllocation?.totalCapital || 100;
+    const slDistance   = Math.abs(livePrice - pending.stopLoss);
+    const maxLoss      = capital * (riskPct / 100);
+    const amount       = slDistance > 0 ? maxLoss / slDistance : (capital * riskPct / 100 * leverage) / livePrice;
+
+    if (!isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Could not calculate valid position size' });
+    }
+
+    const isShort  = pending.type === 'SHORT';
+    const riskDist = isShort ? pending.stopLoss - pending.entry : pending.entry - pending.stopLoss;
+    const tp1Price = riskDist > 0 ? (isShort ? pending.entry - riskDist : pending.entry + riskDist) : null;
+
+    const signal = {
+      action:          'buy',
+      symbol:          tradeSymbol,
+      side:            isShort ? 'short' : 'long',
+      portionIndex:    0,
+      amount,
+      takeProfitPrice: pending.takeProfit,
+      stopLossPrice:   pending.stopLoss,
+      tp1Price,
+      reason:          'manual_execute',
+      confidence:      pending.confidenceScore,
+      score:           pending.score,
+    };
+
+    const { position } = await orderManager.openPosition(bot, signal, tradeSymbol);
+
+    // Set cooldown + clear pending signals
+    const cooldownMs = (bot.cooldownMinutes || 30) * 60 * 1000;
+    await BotConfig.findByIdAndUpdate(bot._id, {
+      pendingSignals: [],
+      cooldownUntil:  new Date(Date.now() + cooldownMs),
+    });
+
+    res.json({ success: true, message: 'Trade executed', data: { position } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/bots/quick-execute
+ * One-off trade execution from Quick Pair Analysis or Analyze a Pair.
+ * Creates a single-trade bot in the background or uses an existing bot.
+ * Body: { signalData, botId?, exchangeAccountId, accountBalance, riskPreset ('safe'|'moderate'|'aggressive') }
+ */
+export const quickExecute = async (req, res) => {
+  try {
+    const { signalData, botId, exchangeAccountId, accountBalance, riskPreset = 'moderate' } = req.body;
+    if (!signalData || !signalData.pair || !signalData.entry) {
+      return res.status(400).json({ success: false, message: 'Signal data is required' });
+    }
+
+    const riskMap = { safe: 1, moderate: 2, aggressive: 5 };
+    const riskPct = riskMap[riskPreset] || 2;
+
+    let bot;
+
+    if (botId) {
+      // Use existing bot
+      bot = await BotConfig.findOne({ _id: botId, userId: req.user.id });
+      if (!bot) return res.status(404).json({ success: false, message: 'Bot not found' });
+    } else {
+      // Resolve exchange from account
+      if (!exchangeAccountId) {
+        return res.status(400).json({ success: false, message: 'Exchange account is required' });
+      }
+      const account = await ExchangeAccount.findOne({ _id: exchangeAccountId, userId: req.user.id });
+      if (!account) return res.status(404).json({ success: false, message: 'Exchange account not found' });
+
+      // Create a lightweight single-trade executor bot
+      bot = await BotConfig.create({
+        userId:           req.user.id,
+        name:             `Quick Trade — ${signalData.pair}`,
+        exchangeAccountId,
+        exchange:         account.exchange,
+        symbol:           signalData.pair.replace('/', ''),
+        marketType:       signalData.marketType || 'futures',
+        strategyId:       'smart_signal',
+        executionMode:    'auto',
+        cooldownMinutes:  0,
+        capitalAllocation: {
+          totalCapital:    accountBalance || 100,
+          maxOpenPositions: 1,
+        },
+        strategyParams: {
+          riskPerTrade:        riskPct,
+          maxConcurrentTrades: 1,
+          leverage:            signalData.leverage || 1,
+        },
+        riskParams: { dailyLossLimitPercent: 5 },
+        status: 'running',
+        startedAt: new Date(),
+        'stats.startingCapital': accountBalance || 100,
+        'stats.currentCapital':  accountBalance || 100,
+        'stats.peakCapital':     accountBalance || 100,
+      });
+    }
+
+    // Pair conflict check
+    const conflict = await pairConflictGuard.checkPairConflict(req.user.id, signalData.pair, bot._id);
+    if (conflict.hasConflict) {
+      return res.json({
+        success: false,
+        conflict: true,
+        message: `${conflict.botName} already has an open ${conflict.positionSide} position on ${signalData.pair}.`,
+        conflict_info: conflict,
+      });
+    }
+
+    // Fetch live price
+    const tradeSymbol = signalData.pair.replace('/', '');
+    const marketType  = signalData.marketType || 'futures';
+    let livePrice = signalData.entry;
+    try {
+      const ticker = await marketDataService.fetchTicker(tradeSymbol, marketType);
+      livePrice = ticker.lastPrice;
+    } catch {
+      console.warn(`[quickExecute] Could not fetch live price for ${tradeSymbol}`);
+    }
+
+    // ATR-based sizing
+    const capital    = bot.capitalAllocation?.totalCapital || accountBalance || 100;
+    const leverage   = signalData.leverage || bot.strategyParams?.leverage || 1;
+    const slDistance = Math.abs(livePrice - signalData.stopLoss);
+    const maxLoss    = capital * (riskPct / 100);
+    const amount     = slDistance > 0 ? maxLoss / slDistance : (capital * riskPct / 100 * leverage) / livePrice;
+
+    if (!isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Could not calculate valid position size' });
+    }
+
+    const isShort  = signalData.type === 'SHORT';
+    const riskDist = isShort ? signalData.stopLoss - signalData.entry : signalData.entry - signalData.stopLoss;
+    const tp1Price = riskDist > 0 ? (isShort ? signalData.entry - riskDist : signalData.entry + riskDist) : null;
+
+    const signal = {
+      action:          'buy',
+      symbol:          tradeSymbol,
+      side:            isShort ? 'short' : 'long',
+      portionIndex:    0,
+      amount,
+      takeProfitPrice: signalData.takeProfit,
+      stopLossPrice:   signalData.stopLoss,
+      tp1Price,
+      reason:          'quick_execute',
+      confidence:      signalData.confidenceScore || 0.7,
+    };
+
+    const { position } = await orderManager.openPosition(bot, signal, tradeSymbol);
+
+    res.json({
+      success: true,
+      message: 'Trade executed successfully',
+      data: { position, botId: bot._id, botName: bot.name },
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

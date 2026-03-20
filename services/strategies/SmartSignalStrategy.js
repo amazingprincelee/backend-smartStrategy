@@ -2,24 +2,31 @@
  * SmartSignalStrategy
  *
  * Reads from the Signal collection (populated by the 30-min sweep cron) and
- * automatically enters trades on the highest-confidence opportunities
- * available on the user's exchange.
+ * automatically enters trades on the highest-scored opportunities.
+ * Supports two execution modes:
+ *   auto   — selects and executes the best single signal automatically
+ *   manual — scores top 3 signals, stores in bot.pendingSignals for user to pick
  *
  * Configuration (bot.strategyParams):
- *   minConfidencePercent  (number, 70)  — minimum signal confidence to trade
- *   maxConcurrentTrades   (number, 2)   — max open positions at once
+ *   minConfidencePercent  (number, 60)  — pre-filter before scoring
+ *   maxConcurrentTrades   (number, 1)   — max open positions (default 1)
  *   riskPerTrade          (number, 2)   — % of totalCapital per trade
  *   leverage              (number, 3)   — futures leverage (ignored for spot)
  *   signalMaxAgeMinutes   (number, 120) — reject signals older than this
  *
  * Safety features:
- *   - Uses LIVE market price for position sizing (not the (possibly stale) signal entry)
- *   - Skips signals where current price drifted >2% from signal entry (too stale to be safe)
- *   - Caps effectiveRisk = riskPerTrade * leverage at bot.riskParams.maxLeverageRiskPct (default 20%)
+ *   - Uses LIVE market price for position sizing
+ *   - Skips signals where current price drifted >2% from signal entry
+ *   - Caps effectiveRisk = riskPerTrade * leverage at maxLeverageRiskPct
+ *   - Cooldown enforcement between trades
+ *   - Consecutive loss pause (2 losses → 1h pause)
+ *   - Daily loss limit check before entry
  */
 
 import Signal from '../../models/Signal.js';
+import BotConfig from '../../models/bot/BotConfig.js';
 import marketDataService from '../MarketDataService.js';
+import scoringEngine from '../SignalScoringEngine.js';
 
 // Generous window — sweep runs every 30 min, so 6 h covers restarts.
 const DEFAULT_MAX_AGE_MIN = 360;
@@ -141,10 +148,40 @@ class SmartSignalStrategy {
     // ── 2. Check capacity ────────────────────────────────────────────────────
     if (openPositions.length >= maxConcurrent) return signals;
 
-    // ── 3. Query recent signals from DB ─────────────────────────────────────
-    const cutoff    = new Date(Date.now() - maxAgeMs);
-    const openPairs = new Set(openPositions.map(p => p.symbol.replace('/', '')));
-    const slotsLeft = maxConcurrent - openPositions.length;
+    // ── 3. Cooldown check ────────────────────────────────────────────────────
+    if (bot.cooldownUntil && new Date() < new Date(bot.cooldownUntil)) {
+      const remaining = Math.ceil((new Date(bot.cooldownUntil) - Date.now()) / 60000);
+      console.log(`[SmartSignal] bot=${bot.name} — cooldown active, ${remaining}min remaining`);
+      return signals;
+    }
+
+    // ── 4. Consecutive loss pause (2 losses → 1h pause) ─────────────────────
+    const consecutiveLosses = bot.stats?.consecutiveLosses || 0;
+    if (consecutiveLosses >= 2) {
+      const pauseUntil = new Date(Date.now() + 60 * 60 * 1000); // 1h
+      await BotConfig.findByIdAndUpdate(bot._id, {
+        status: 'paused',
+        statusMessage: `Paused 1h — 2 consecutive losses. Auto-resumes at ${pauseUntil.toLocaleTimeString()}.`,
+        cooldownUntil: pauseUntil,
+        'stats.consecutiveLosses': 0,
+      });
+      console.log(`[SmartSignal] bot=${bot.name} paused 1h after 2 consecutive losses`);
+      return signals;
+    }
+
+    // ── 5. Daily loss limit check ────────────────────────────────────────────
+    const dailyLossLimit = bot.riskParams?.dailyLossLimitPercent || 5;
+    const startingCapital = bot.stats?.startingCapital || bot.capitalAllocation?.totalCapital || 100;
+    const currentCapital  = bot.stats?.currentCapital  || startingCapital;
+    const drawdownPct     = ((startingCapital - currentCapital) / startingCapital) * 100;
+    if (drawdownPct >= dailyLossLimit) {
+      console.log(`[SmartSignal] bot=${bot.name} — daily loss limit reached (${drawdownPct.toFixed(1)}%)`);
+      return signals;
+    }
+
+    // ── 6. Query recent signals from DB ─────────────────────────────────────
+    const cutoff     = new Date(Date.now() - maxAgeMs);
+    const openPairs  = new Set(openPositions.map(p => p.symbol.replace('/', '')));
     const typeFilter = marketType === 'futures' ? { $in: ['LONG', 'SHORT'] } : 'LONG';
 
     const dbSignals = await Signal.find({
@@ -154,91 +191,121 @@ class SmartSignalStrategy {
       marketType,
     })
       .sort({ confidenceScore: -1, timestamp: -1 })
-      .limit(50)
+      .limit(100)
       .lean();
 
-    console.log(
-      `[SmartSignal] bot=${bot.name} market=${marketType} minConf=${(minConfidence * 100).toFixed(0)}% ` +
-      `window=${ageMin}min → found ${dbSignals.length} candidate(s), ` +
-      `openPositions=${openPositions.length}/${maxConcurrent}`
+    // Filter out pairs already in open positions
+    const candidates = dbSignals.filter(s =>
+      s.entry && s.stopLoss && s.takeProfit &&
+      !openPairs.has(s.pair.replace('/', ''))
     );
 
-    let filled = 0;
-    for (const sig of dbSignals) {
-      if (filled >= slotsLeft) break;
+    // ── 7. Score and rank signals ─────────────────────────────────────────────
+    const executionMode = bot.executionMode || 'auto';
+    const ranked = scoringEngine.rankSignals(candidates, executionMode === 'manual' ? 3 : 10);
 
-      // Skip signals with missing price levels
-      if (!sig.entry || !sig.stopLoss || !sig.takeProfit) continue;
+    console.log(
+      `[SmartSignal] bot=${bot.name} mode=${executionMode} market=${marketType} ` +
+      `minConf=${(minConfidence * 100).toFixed(0)}% window=${ageMin}min ` +
+      `→ ${candidates.length} candidate(s), ${ranked.length} qualified (score≥${scoringEngine.MIN_SCORE})`
+    );
 
-      const tradeSymbol = sig.pair.replace('/', '');
+    // ── 8. Manual mode — store top 3 pending signals, don't execute ──────────
+    if (executionMode === 'manual') {
+      const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2h
+      const pendingSignals = ranked.map(sig => ({
+        signalId:        sig._id,
+        pair:            sig.pair,
+        type:            sig.type,
+        entry:           sig.entry,
+        stopLoss:        sig.stopLoss,
+        takeProfit:      sig.takeProfit,
+        score:           sig.score,
+        breakdown:       sig.breakdown,
+        reasons:         sig.reasons || [],
+        confidenceScore: sig.confidenceScore,
+        marketType:      sig.marketType,
+        expiresAt,
+      }));
 
-      // Skip if we already have an open position in this pair
-      if (openPairs.has(tradeSymbol)) continue;
+      await BotConfig.findByIdAndUpdate(bot._id, { pendingSignals });
 
-      // ── Fetch live price for accurate position sizing ────────────────────
-      // Signal entry may be up to signalMaxAgeMinutes old. Using a stale price
-      // for sizing means our actual risk % will be wrong. Use the live price.
-      let livePrice = sig.entry; // fallback
-      try {
-        const ticker = await marketDataService.fetchTicker(tradeSymbol, marketType);
-        livePrice = ticker.lastPrice;
-      } catch {
-        console.warn(`[SmartSignal] Could not fetch live price for ${tradeSymbol}, using signal entry`);
+      if (pendingSignals.length > 0) {
+        console.log(`[SmartSignal] bot=${bot.name} — ${pendingSignals.length} pending signal(s) queued for manual review`);
       }
+      return signals; // no auto execution
+    }
 
-      // ── Price drift guard ────────────────────────────────────────────────
-      // If the market has moved more than MAX_PRICE_DRIFT_PCT from the signal's
-      // entry, the TP/SL levels are based on a price that no longer reflects
-      // current conditions. Skip to avoid entering at a bad risk:reward.
-      const drift = Math.abs(livePrice - sig.entry) / sig.entry * 100;
-      if (drift > MAX_PRICE_DRIFT_PCT) {
-        console.log(
-          `[SmartSignal] Skipping ${tradeSymbol} — price drifted ${drift.toFixed(2)}% ` +
-          `from signal entry $${sig.entry} → live $${livePrice}`
-        );
-        continue;
-      }
+    // ── 9. Auto mode — execute the single best signal ────────────────────────
+    const best = ranked[0];
+    if (!best) {
+      console.log(`[SmartSignal] bot=${bot.name} — no signals met score threshold this tick`);
+      return signals;
+    }
 
-      // ── Position sizing using live price ────────────────────────────────
-      const amount = (capital * finalRiskPct / 100 * leverage) / livePrice;
-      if (!isFinite(amount) || amount <= 0) continue;
+    const tradeSymbol = best.pair.replace('/', '');
 
-      // ── Ladder exit: compute TP1 at 1:1 R:R ─────────────────────────────
-      // riskDist = distance from entry to stop loss
-      // TP1 = entry ± riskDist (1:1 risk:reward — half position secured here)
-      const isShortSig = sig.type === 'SHORT';
-      const riskDist = isShortSig
-        ? sig.stopLoss - sig.entry   // short SL is above entry
-        : sig.entry - sig.stopLoss;  // long SL is below entry
-      const tp1Price = riskDist > 0
-        ? (isShortSig ? sig.entry - riskDist : sig.entry + riskDist)
-        : null;
+    // Fetch live price for accurate position sizing
+    let livePrice = best.entry;
+    try {
+      const ticker = await marketDataService.fetchTicker(tradeSymbol, marketType);
+      livePrice = ticker.lastPrice;
+    } catch {
+      console.warn(`[SmartSignal] Could not fetch live price for ${tradeSymbol}, using signal entry`);
+    }
 
-      signals.push({
-        action:          'buy',
-        symbol:          tradeSymbol,
-        side:            isShortSig ? 'short' : 'long',
-        portionIndex:    openPositions.length + filled,
-        amount,
-        takeProfitPrice: sig.takeProfit,
-        stopLossPrice:   sig.stopLoss,
-        tp1Price,
-        reason:          'smart_signal',
-        confidence:      sig.confidenceScore,
-      });
-
-      openPairs.add(tradeSymbol);
-      filled++;
+    // Price drift guard
+    const drift = Math.abs(livePrice - best.entry) / best.entry * 100;
+    if (drift > MAX_PRICE_DRIFT_PCT) {
       console.log(
-        `[SmartSignal] → queuing ${sig.type} ${tradeSymbol} ` +
-        `entry=$${sig.entry} live=$${livePrice} drift=${drift.toFixed(2)}% ` +
-        `amount=${amount.toFixed(6)} conf=${(sig.confidenceScore * 100).toFixed(0)}%`
+        `[SmartSignal] Skipping ${tradeSymbol} — price drifted ${drift.toFixed(2)}% ` +
+        `from signal entry $${best.entry} → live $${livePrice}`
       );
+      return signals;
     }
 
-    if (filled === 0) {
-      console.log(`[SmartSignal] bot=${bot.name} — no actionable signals this tick`);
-    }
+    // ATR-based position sizing: maxLoss / SL_distance = units to buy
+    const isShortSig  = best.type === 'SHORT';
+    const slDistance  = Math.abs(livePrice - best.stopLoss);
+    const maxLoss     = capital * (finalRiskPct / 100);
+    const amount      = slDistance > 0 ? maxLoss / slDistance : (capital * finalRiskPct / 100 * leverage) / livePrice;
+
+    if (!isFinite(amount) || amount <= 0) return signals;
+
+    // Ladder TP1 at 1:1 R:R
+    const riskDist = isShortSig
+      ? best.stopLoss - best.entry
+      : best.entry - best.stopLoss;
+    const tp1Price = riskDist > 0
+      ? (isShortSig ? best.entry - riskDist : best.entry + riskDist)
+      : null;
+
+    // Set cooldown after entry
+    const cooldownMs = (bot.cooldownMinutes || 30) * 60 * 1000;
+    await BotConfig.findByIdAndUpdate(bot._id, {
+      cooldownUntil: new Date(Date.now() + cooldownMs),
+      pendingSignals: [],
+    });
+
+    signals.push({
+      action:          'buy',
+      symbol:          tradeSymbol,
+      side:            isShortSig ? 'short' : 'long',
+      portionIndex:    openPositions.length,
+      amount,
+      takeProfitPrice: best.takeProfit,
+      stopLossPrice:   best.stopLoss,
+      tp1Price,
+      reason:          'smart_signal',
+      confidence:      best.confidenceScore,
+      score:           best.score,
+    });
+
+    console.log(
+      `[SmartSignal] → AUTO executing ${best.type} ${tradeSymbol} ` +
+      `score=${best.score} entry=$${best.entry} live=$${livePrice} drift=${drift.toFixed(2)}% ` +
+      `amount=${amount.toFixed(6)} conf=${(best.confidenceScore * 100).toFixed(0)}%`
+    );
 
     return signals;
   }
