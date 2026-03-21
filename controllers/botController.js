@@ -18,11 +18,12 @@ export const listBots = async (req, res) => {
     const bots = await BotConfig.find({ userId: req.user.id })
       .sort({ createdAt: -1 });
 
-    // Enrich with open position counts
+    // Enrich with open position counts + unrealized P&L
     const enriched = await Promise.all(bots.map(async (bot) => {
-      const openPositions = await Position.countDocuments({ botId: bot._id, status: 'open' });
+      const positions = await Position.find({ botId: bot._id, status: 'open' }).select('unrealizedPnL');
       const obj = bot.toObject();
-      obj.openPositionsCount = openPositions;
+      obj.openPositionsCount = positions.length;
+      obj.unrealizedPnL = positions.reduce((sum, p) => sum + (p.unrealizedPnL || 0), 0);
       obj.isRunning = botEngine.isRunning(bot._id);
       return obj;
     }));
@@ -41,7 +42,8 @@ export const createBot = async (req, res) => {
     const {
       name, exchange, symbol, marketType, strategyId,
       strategyParams, capitalAllocation, riskParams,
-      exchangeAccountId, isDemo, executionMode, cooldownMinutes
+      exchangeAccountId, isDemo, executionMode, cooldownMinutes,
+      pendingSignal,  // pre-selected signal from manual mode setup
     } = req.body;
 
     if (!name || !exchange || !symbol || !strategyId || !capitalAllocation?.totalCapital) {
@@ -74,7 +76,19 @@ export const createBot = async (req, res) => {
       symbol: symbol.toUpperCase(),
       marketType: marketType || 'spot',
       strategyId,
-      executionMode: executionMode || 'auto',
+      executionMode: executionMode || 'manual',
+      // If user pre-selected a signal during setup, store it so BotEngine executes it on first tick
+      pendingSignals: pendingSignal ? [{
+        pair:            pendingSignal.pair || pendingSignal.symbol,
+        type:            pendingSignal.type || pendingSignal.signal,
+        entry:           pendingSignal.entry,
+        stopLoss:        pendingSignal.stopLoss,
+        takeProfit:      pendingSignal.takeProfit,
+        confidenceScore: pendingSignal.confidenceScore ?? pendingSignal.confidence,
+        marketType:      pendingSignal.marketType || marketType,
+        reasons:         pendingSignal.reasons || [],
+        expiresAt:       new Date(Date.now() + 2 * 60 * 60 * 1000), // 2h validity
+      }] : [],
       cooldownMinutes: cooldownMinutes ?? 30,
       strategyParams: strategyParams || {},
       capitalAllocation,

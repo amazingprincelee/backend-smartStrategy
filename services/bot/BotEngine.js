@@ -196,6 +196,39 @@ class BotEngine {
       // Re-fetch with updated stats
       bot = await BotConfig.findById(botId);
 
+      // ── Check for pre-selected pending signal (manual mode setup) ────────
+      // If user picked a signal during bot creation, execute it on first tick
+      const now = new Date();
+      const pendingSignal = (bot.pendingSignals || []).find(
+        ps => openPositions.length === 0 && (!ps.expiresAt || ps.expiresAt > now)
+      );
+      if (pendingSignal) {
+        const riskCheck = await riskEngine.checkCanOpenPosition(bot, 0);
+        if (riskCheck.allowed) {
+          try {
+            const tradeSymbol = (pendingSignal.pair || bot.symbol).replace('/', '');
+            const buySignal = {
+              action:         'buy',
+              symbol:         tradeSymbol,
+              type:           pendingSignal.type,
+              entryPrice:     currentPrice,   // use live price, not stale entry
+              stopLossPrice:  pendingSignal.stopLoss,
+              takeProfitPrice:pendingSignal.takeProfit,
+              amount:         bot.capitalAllocation.totalCapital / currentPrice,
+              confidence:     pendingSignal.confidenceScore ?? 0.7,
+              reasons:        pendingSignal.reasons || ['User-selected signal from setup'],
+            };
+            const { position } = await orderManager.openPosition(bot, buySignal, tradeSymbol);
+            this._emitTrade(bot, 'buy', position.entryPrice, buySignal.amount, position._id, null, tradeSymbol);
+            console.log(`[BotEngine] Executed pre-selected signal for bot ${botId}: ${tradeSymbol}`);
+          } catch (psErr) {
+            console.error(`[BotEngine] Pre-selected signal execution failed:`, psErr.message);
+          }
+        }
+        // Clear pending signal regardless of success so it doesn't retry every tick
+        await BotConfig.findByIdAndUpdate(botId, { pendingSignals: [] });
+      }
+
       // Run strategy
       const strategy = STRATEGY_MAP[bot.strategyId];
       if (!strategy) {
@@ -211,7 +244,6 @@ class BotEngine {
       const tickAction = hasBuy ? 'entry' : hasSell ? 'exit' : 'waiting';
 
       // Build and persist lastAnalysis + tickLog
-      const now       = new Date();
       const nextTickAt = new Date(Date.now() + intervalMs);
       const tickEntry  = { timestamp: now, currentPrice, rsi: currentRSI, volumeRatio, action: tickAction };
 
