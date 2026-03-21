@@ -185,7 +185,10 @@ const botConfigSchema = new mongoose.Schema({
       action:       { type: String }  // 'entry' | 'exit' | 'waiting'
     }],
     default: []
-  }
+  },
+
+  // Pre-selected signal from manual mode setup (Mixed avoids subdoc 'type' field conflict)
+  pendingSignalOverride: { type: mongoose.Schema.Types.Mixed, default: null },
 }, {
   timestamps: true
 });

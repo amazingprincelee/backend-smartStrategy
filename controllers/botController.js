@@ -77,18 +77,18 @@ export const createBot = async (req, res) => {
       marketType: marketType || 'spot',
       strategyId,
       executionMode: executionMode || 'manual',
-      // If user pre-selected a signal during setup, store it so BotEngine executes it on first tick
-      pendingSignals: pendingSignal ? [{
+      // Pre-selected signal from manual mode setup — stored as Mixed to avoid subdoc type conflict
+      pendingSignalOverride: pendingSignal ? {
         pair:            pendingSignal.pair || pendingSignal.symbol,
-        type:            pendingSignal.type || pendingSignal.signal,
+        direction:       pendingSignal.type || pendingSignal.signal,  // renamed from 'type' to avoid conflicts
         entry:           pendingSignal.entry,
         stopLoss:        pendingSignal.stopLoss,
         takeProfit:      pendingSignal.takeProfit,
         confidenceScore: pendingSignal.confidenceScore ?? pendingSignal.confidence,
         marketType:      pendingSignal.marketType || marketType,
         reasons:         pendingSignal.reasons || [],
-        expiresAt:       new Date(Date.now() + 2 * 60 * 60 * 1000), // 2h validity
-      }] : [],
+        expiresAt:       new Date(Date.now() + 2 * 60 * 60 * 1000),
+      } : null,
       cooldownMinutes: cooldownMinutes ?? 30,
       strategyParams: strategyParams || {},
       capitalAllocation,
