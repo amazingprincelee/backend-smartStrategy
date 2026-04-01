@@ -29,7 +29,7 @@ const DEFAULT_CONFIG = {
   maxTradeAmountUSD: 10000,       // Maximum trade size to analyze
   maxSlippagePercent: 0.8,        // Maximum acceptable slippage (raised for mid-cap altcoins)
   minLiquidityScore: 10,          // Minimum liquidity score (lowered to allow thinner order books)
-  orderBookDepth: 20,             // Order book depth to fetch
+  orderBookDepth: 10,             // Order book depth to fetch
   tradeSizesToTest: [25, 50, 100, 250, 500, 1000] // Start small to find more opportunities
 };
 

@@ -252,7 +252,7 @@ export function initializeService(config = {}) {
     maxTradeAmountUSD: config.maxTradeAmountUSD ?? 10000,
     maxSlippagePercent: config.maxSlippagePercent ?? 0.8,    // raised from 0.5 — mid-caps have more slippage
     minLiquidityScore: config.minLiquidityScore ?? 10,       // lowered from 20 — allow thinner books
-    orderBookDepth: config.orderBookDepth ?? 20,
+    orderBookDepth: config.orderBookDepth ?? 10,
     tradeSizesToTest: config.tradeSizesToTest ?? [25, 50, 100, 250, 500, 1000] // start small
   });
 
