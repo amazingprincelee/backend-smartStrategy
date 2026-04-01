@@ -414,10 +414,10 @@ const startServer = async () => {
     // Run once immediately on startup so SmartSignal bots have signals from minute 0
     setTimeout(runSweep, 5000);
 
-    // Schedule Technical Analysis Engine background sweep (every 15 min)
-    console.log('📡 Scheduling Technical Analysis sweep (every 15 min, spot + futures)...');
-    cron.schedule('*/15 * * * *', runSweep);
-    console.log('✅ Technical Analysis sweep scheduled every 15 min (spot + futures)');
+    // Schedule Technical Analysis Engine background sweep (every 1 hour)
+    console.log('📡 Scheduling Technical Analysis sweep (every 1 hour, spot + futures)...');
+    cron.schedule('0 * * * *', runSweep);
+    console.log('✅ Technical Analysis sweep scheduled every 1 hour (spot + futures)');
 
     // Early Alpha sweep — scans CoinGecko + volume + whale data every 5 minutes.
     // Stagger by 2 min so it doesn't collide with the TA sweep on the :15 boundary.

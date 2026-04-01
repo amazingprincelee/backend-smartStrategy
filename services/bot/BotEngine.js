@@ -120,6 +120,7 @@ class BotEngine {
   async _tick(botId) {
     let bot;
     try {
+      const now = new Date();
       bot = await BotConfig.findById(botId);
       if (!bot || bot.status !== 'running') {
         await this.stopBot(botId);
