@@ -28,7 +28,7 @@ import signalRoutes       from './routes/signals.js';
 import paymentRoutes      from './routes/payments.js';
 import supportRoutes     from './routes/support.js';
 import withdrawalRoutes  from './routes/withdrawals.js';
-import alphaRoutes       from './routes/alpha.js';
+import investmentRoutes  from './routes/investment.js';
 
 // Import services
 import emailService from './utils/emailService.js';
@@ -47,10 +47,8 @@ import { verifyToken } from './utils/jwt.js';
 // Technical Analysis Engine + cron sweep
 import cron from 'node-cron';
 import { sweepTopPairs } from './services/TechnicalAnalysisEngine.js';
-import { runAlphaSweep } from './services/EarlyAlphaService.js';
 import SignalModel from './models/Signal.js';
-import AlphaSignal from './models/AlphaSignal.js';
-import axios from 'axios';
+import Investment from './models/Investment.js';
 // Exchange pairs preloader (DB-backed, monthly refresh)
 import { refreshStaleExchangePairs } from './controllers/signalController.js';
 // User model for subscription reminder cron
@@ -125,7 +123,7 @@ app.use(generalLimiter);
 // Raw body capture for payment webhooks (must come BEFORE express.json())
 // Webhook signature verification requires the raw request body.
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/payments/webhook/')) {
+  if (req.path.startsWith('/api/payments/webhook/') || req.path === '/api/investment/webhook') {
     let data = '';
     req.setEncoding('utf8');
     req.on('data', chunk => { data += chunk; });
@@ -174,7 +172,7 @@ app.use('/api/signals',          signalRoutes);
 app.use('/api/payments',         paymentRoutes);
 app.use('/api/support',          supportRoutes);
 app.use('/api/withdrawals',      withdrawalRoutes);
-app.use('/api/alpha',            alphaRoutes);
+app.use('/api/investment',       investmentRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -419,63 +417,27 @@ const startServer = async () => {
     cron.schedule('0 * * * *', runSweep);
     console.log('✅ Technical Analysis sweep scheduled every 1 hour (spot + futures)');
 
-    // Early Alpha sweep — scans CoinGecko + volume + whale data every 5 minutes.
-    // Stagger by 2 min so it doesn't collide with the TA sweep on the :15 boundary.
-    cron.schedule('2-59/5 * * * *', async () => {
+    // Trade4Me — daily earnings accrual (runs at 1 AM UTC)
+    cron.schedule('0 1 * * *', async () => {
       try {
-        await runAlphaSweep();
+        const investments = await Investment.find({ status: 'active' });
+        let accrued = 0;
+        for (const inv of investments) {
+          const balance      = inv.amount + inv.totalEarnings;
+          const dailyRate    = inv.apy / 100 / 365;
+          const dailyEarning = balance * dailyRate;
+          await Investment.findByIdAndUpdate(inv._id, {
+            $inc: { totalEarnings: dailyEarning },
+            lastEarningsDate: new Date(),
+          });
+          accrued++;
+        }
+        if (accrued > 0) console.log(`[Trade4Me] Accrued daily earnings for ${accrued} investment(s)`);
       } catch (err) {
-        console.warn('[EarlyAlpha] Cron sweep error:', err.message);
+        console.warn('[Trade4Me] Earnings accrual error:', err.message);
       }
     });
-    console.log('✅ Early Alpha sweep scheduled every 5 min');
-
-    // Alpha live price broadcast — fetches Gate.io prices for all active alpha signals
-    // and pushes to all connected Socket.IO clients every 30 seconds.
-    // One server-side call serves all users — far cheaper than per-client HTTP polling.
-    const _alphaPriceCache = new Map(); // symbol → { price, ts }
-    const ALPHA_PRICE_TTL  = 28_000;   // slightly less than broadcast interval
-
-    const broadcastAlphaPrices = async () => {
-      try {
-        const signals = await AlphaSignal.find({ isActive: true }).select('symbol').lean();
-        const symbols = [...new Set(signals.map(s => s.symbol))];
-        if (!symbols.length) return;
-
-        const now    = Date.now();
-        const prices = {};
-        await Promise.all(symbols.map(async (sym) => {
-          const cached = _alphaPriceCache.get(sym);
-          if (cached && now - cached.ts < ALPHA_PRICE_TTL) {
-            prices[sym] = cached.price;
-            return;
-          }
-          try {
-            const pair = `${sym.replace('USDT', '')}_USDT`;
-            const res  = await axios.get(
-              `https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair}`,
-              { timeout: 5000 }
-            );
-            const price = parseFloat(res.data?.[0]?.last);
-            if (!isNaN(price)) {
-              _alphaPriceCache.set(sym, { price, ts: now });
-              prices[sym] = price;
-            }
-          } catch { /* skip failed symbols */ }
-        }));
-
-        if (Object.keys(prices).length > 0) {
-          io.emit('alpha:prices', prices);
-        }
-      } catch (err) {
-        console.warn('[Alpha prices] Broadcast error:', err.message);
-      }
-    };
-
-    // Broadcast immediately after first alpha sweep settles, then every 30s
-    setTimeout(broadcastAlphaPrices, 15_000);
-    setInterval(broadcastAlphaPrices, 30_000);
-    console.log('✅ Alpha live price broadcast scheduled every 30s (Socket.IO)');
+    console.log('✅ Trade4Me daily earnings accrual scheduled (1 AM UTC)');
 
     // Nightly signal cleanup — delete signals older than 30 days at 2 AM UTC.
     // Prevents the Signal collection from growing unbounded on a budget MongoDB instance.

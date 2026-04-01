@@ -91,9 +91,6 @@ const userSchema = new mongoose.Schema({
   // ── Credits (from referrals) ─────────────────────────────────────────────────
   credits: { type: Number, default: 0 },  // $USD credit balance
 
-  // ── Early Alpha Favorites ────────────────────────────────────────────────────
-  alphaFavorites: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AlphaSignal' }],
-
   // ── Google OAuth ─────────────────────────────────────────────────────────────
   googleId: { type: String, default: null, sparse: true },
   authProvider: { type: String, enum: ['local', 'google'], default: 'local' },
